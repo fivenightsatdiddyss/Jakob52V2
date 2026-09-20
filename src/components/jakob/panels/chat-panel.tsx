@@ -1,0 +1,929 @@
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { io, type Socket } from 'socket.io-client'
+import {
+  MessagesSquare,
+  Send,
+  Hash,
+  Circle,
+  Radio,
+  Pencil,
+  X,
+  Upload,
+  Sparkles,
+  Smile,
+  Image as ImageIcon,
+  Check,
+  Users,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
+
+type ChatMsg = {
+  id: string
+  user: string
+  text: string
+  color: string
+  avatar: string
+  time: string
+}
+
+type Profile = {
+  name: string
+  color: string
+  avatar: string
+}
+
+type RosterEntry = {
+  id: string
+  user: string
+  color: string
+  avatar: string
+}
+
+type PresencePayload = { online: number }
+type TypingPayload = { user: string; typing: boolean }
+
+// Decorative channel list — only `general` is the live, shared relay channel.
+const CHANNELS = [
+  { id: 'general', name: 'general', topic: 'the live relay — open to all drifters', live: true },
+  { id: 'singularity', name: 'singularity', topic: 'black hole talk (coming soon)', live: false },
+  { id: 'glass-design', name: 'glass-design', topic: 'liquid ui craft (coming soon)', live: false },
+  { id: 'arcade', name: 'arcade', topic: 'high scores & runs (coming soon)', live: false },
+  { id: 'proxy-lab', name: 'proxy-lab', topic: 'routing experiments (coming soon)', live: false },
+]
+
+const QUICK = ['nice', 'lol', '+1', 'on it', '✦']
+
+const COLORS = [
+  'text-fuchsia-300',
+  'text-sky-300',
+  'text-amber-300',
+  'text-emerald-300',
+  'text-rose-300',
+  'text-violet-300',
+  'text-cyan-300',
+  'text-orange-300',
+]
+
+// 8 gradient presets — avatar stored as "preset:N"
+const PRESET_GRADIENTS = [
+  'from-fuchsia-500 to-violet-600',
+  'from-rose-500 to-orange-500',
+  'from-sky-500 to-cyan-400',
+  'from-emerald-500 to-teal-500',
+  'from-amber-500 to-yellow-500',
+  'from-pink-500 to-rose-600',
+  'from-cyan-500 to-blue-500',
+  'from-violet-500 to-purple-600',
+]
+
+const EMOJIS = [
+  '👾', '🦊', '🐙', '🦄', '🐲', '🌟',
+  '🌌', '🚀', '🔮', '🎇', '🪐', '🤖',
+  '🎉', '🍕', '🎮', '🎧', '📚', '⚡',
+  '🔥', '💧', '🌈', '🐱', '🦉', '🐳',
+]
+
+const LS_KEY = 'jakob52-chat-profile'
+const AVATAR_MAX = 400
+
+const randomGuest = () => {
+  const n = Math.floor(1000 + Math.random() * 9000)
+  return `guest-${n}`
+}
+
+const pickColor = () => COLORS[Math.floor(Math.random() * COLORS.length)]
+
+const defaultProfile = (): Profile => ({
+  name: '',
+  color: pickColor(),
+  avatar: 'preset:0',
+})
+
+const formatTime = (iso: string) => {
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return 'now'
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return 'now'
+  }
+}
+
+const initialOf = (name: string) =>
+  (name || '?').trim().slice(0, 1).toUpperCase() || '?'
+
+// ---- avatar rendering helpers ----
+const isUrl = (s: string) => s.startsWith('data:') || s.startsWith('http')
+
+const isEmoji = (s: string) => s.length > 0 && s.length <= 4 && !isUrl(s)
+
+const presetGradient = (avatar: string) => {
+  const idx = Number.parseInt(avatar.slice('preset:'.length), 10)
+  const safe = Number.isFinite(idx) ? idx : 0
+  return PRESET_GRADIENTS[((safe % PRESET_GRADIENTS.length) + PRESET_GRADIENTS.length) % PRESET_GRADIENTS.length]
+}
+
+// Renders an avatar circle based on the avatar encoding.
+// size: 'sm' (28px sidebar/roster) | 'md' (36px messages) | 'lg' (48px editor preview)
+function Avatar({
+  avatar,
+  name,
+  size = 'md',
+  className,
+}: {
+  avatar: string
+  name: string
+  size?: 'sm' | 'md' | 'lg'
+  className?: string
+}) {
+  const dims =
+    size === 'sm'
+      ? 'h-7 w-7 text-xs'
+      : size === 'lg'
+        ? 'h-12 w-12 text-base'
+        : 'h-9 w-9 text-sm'
+  const initial = initialOf(name)
+
+  if (avatar.startsWith('preset:')) {
+    return (
+      <div
+        className={cn(
+          'grid shrink-0 place-items-center rounded-full bg-gradient-to-br font-bold text-white shadow-inner',
+          dims,
+          presetGradient(avatar),
+          className,
+        )}
+      >
+        {initial}
+      </div>
+    )
+  }
+
+  if (isUrl(avatar)) {
+    return (
+      <img
+        src={avatar}
+        alt={name ? `${name} avatar` : 'avatar'}
+        className={cn('shrink-0 rounded-full object-cover', dims, className)}
+      />
+    )
+  }
+
+  if (isEmoji(avatar)) {
+    return (
+      <div
+        className={cn(
+          'grid shrink-0 place-items-center rounded-full bg-white/10 ring-1 ring-inset ring-white/15',
+          dims,
+          className,
+        )}
+      >
+        <span className="leading-none">
+          {size === 'lg' ? 'text-2xl' : size === 'sm' ? 'text-base' : 'text-lg'}
+          {avatar}
+        </span>
+      </div>
+    )
+  }
+
+  // fallback → initial in a plain circle
+  return (
+    <div
+      className={cn(
+        'grid shrink-0 place-items-center rounded-full bg-white/10 font-bold text-white/80 ring-1 ring-inset ring-white/15',
+        dims,
+        className,
+      )}
+    >
+      {initial}
+    </div>
+  )
+}
+
+// Downscale an image file to a small data URL (≤ AVATAR_MAX chars).
+// Tries progressively smaller sizes / lower qualities until it fits.
+const downscaleToDataUrl = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('not an image'))
+      return
+    }
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('read failed'))
+    reader.onload = () => {
+      const img = new Image()
+      img.onerror = () => reject(new Error('decode failed'))
+      img.onload = () => {
+        const minDim = Math.min(img.width, img.height) || 1
+        const sx = (img.width - minDim) / 2
+        const sy = (img.height - minDim) / 2
+        const sizes = [64, 48, 40, 32, 28, 24]
+        const qualities = [0.7, 0.5, 0.35, 0.25]
+        for (const size of sizes) {
+          for (const q of qualities) {
+            const canvas = document.createElement('canvas')
+            canvas.width = size
+            canvas.height = size
+            const ctx = canvas.getContext('2d')
+            if (!ctx) continue
+            ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size)
+            const url = canvas.toDataURL('image/jpeg', q)
+            if (url.length <= AVATAR_MAX) {
+              resolve(url)
+              return
+            }
+          }
+        }
+        reject(new Error('too large'))
+      }
+      img.src = reader.result as string
+    }
+    reader.readAsDataURL(file)
+  })
+
+export default function ChatPanel() {
+  // profile — starts as a default; loaded from localStorage (or generated) on mount
+  const [profile, setProfile] = useState<Profile>(defaultProfile)
+  const [profileLoaded, setProfileLoaded] = useState(false)
+  // keep a ref so socket connect handler always sees the latest profile
+  const profileRef = useRef<Profile>(profile)
+  useEffect(() => {
+    profileRef.current = profile
+  }, [profile])
+
+  // socket subscription state — set from external socket callbacks, not synchronously in effect body
+  const [messages, setMessages] = useState<ChatMsg[]>([])
+  const [online, setOnline] = useState(0)
+  const [connected, setConnected] = useState(false)
+  const [input, setInput] = useState('')
+  const [typingUser, setTypingUser] = useState<string | null>(null)
+  const [roster, setRoster] = useState<RosterEntry[]>([])
+
+  // profile editor modal state
+  const [editing, setEditing] = useState(false)
+  const [draftName, setDraftName] = useState('')
+  const [draftColor, setDraftColor] = useState('')
+  const [draftAvatar, setDraftAvatar] = useState('')
+  const [avatarMode, setAvatarMode] = useState<'preset' | 'emoji' | 'upload'>('preset')
+  const [uploading, setUploading] = useState(false)
+
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const socketRef = useRef<Socket | null>(null)
+  const typingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // ---- load profile from localStorage on mount ----
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    let loaded: Profile | null = null
+    try {
+      const raw = window.localStorage.getItem(LS_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<Profile>
+        if (parsed && typeof parsed === 'object') {
+          loaded = {
+            name:
+              typeof parsed.name === 'string'
+                ? parsed.name.slice(0, 24).trim() || randomGuest()
+                : randomGuest(),
+            color:
+              typeof parsed.color === 'string' && parsed.color
+                ? parsed.color.slice(0, 40)
+                : pickColor(),
+            avatar:
+              typeof parsed.avatar === 'string' && parsed.avatar
+                ? parsed.avatar.slice(0, AVATAR_MAX)
+                : 'preset:0',
+          }
+        }
+      }
+    } catch {
+      loaded = null
+    }
+    if (!loaded) {
+      loaded = { name: randomGuest(), color: pickColor(), avatar: 'preset:0' }
+    }
+    setProfile(loaded)
+    setProfileLoaded(true)
+  }, [])
+
+  // ---- socket lifecycle ----
+  useEffect(() => {
+    // CRITICAL: gateway requires path "/" + ?XTransformPort=3003 in the URI.
+    // Baking the query into the URI string (matching the websocket demo) ensures
+    // socket.io uses "/" as the engine.io path so Caddy can route to port 3003.
+    // Never use a direct http://localhost:3003 URL — that bypasses the gateway.
+    const socket = io('/?XTransformPort=3003', {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+    })
+    socketRef.current = socket
+
+    socket.on('connect', () => {
+      setConnected(true)
+      // announce our profile so the server roster knows who we are
+      const p = profileRef.current
+      if (p.name) {
+        socket.emit('profile', { user: p.name, color: p.color, avatar: p.avatar })
+      }
+    })
+    socket.on('disconnect', () => setConnected(false))
+    socket.on('presence', (p: PresencePayload) => setOnline(p.online))
+    socket.on('history', (hist: ChatMsg[]) =>
+      setMessages(Array.isArray(hist) ? hist : []),
+    )
+    socket.on('message', (msg: ChatMsg) =>
+      setMessages((prev) =>
+        prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
+      ),
+    )
+    socket.on('typing', (p: TypingPayload) => {
+      setTypingUser(p.typing ? p.user : null)
+      if (typingClearRef.current) clearTimeout(typingClearRef.current)
+      if (p.typing) {
+        typingClearRef.current = setTimeout(() => setTypingUser(null), 3000)
+      }
+    })
+    socket.on('roster', (r: RosterEntry[]) => {
+      setRoster(Array.isArray(r) ? r : [])
+    })
+
+    return () => {
+      socket.disconnect()
+      socketRef.current = null
+      if (typingClearRef.current) clearTimeout(typingClearRef.current)
+    }
+  }, [])
+
+  // re-broadcast our profile whenever it changes (so the roster stays live)
+  useEffect(() => {
+    if (!profileLoaded) return
+    const sock = socketRef.current
+    if (!sock || !sock.connected) return
+    if (!profile.name) return
+    sock.emit('profile', {
+      user: profile.name,
+      color: profile.color,
+      avatar: profile.avatar,
+    })
+  }, [profile, profileLoaded])
+
+  // ---- auto-scroll on new message ----
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [messages.length])
+
+  // ---- profile editor helpers ----
+  const openEditor = () => {
+    setDraftName(profile.name)
+    setDraftColor(profile.color)
+    setDraftAvatar(profile.avatar)
+    if (profile.avatar.startsWith('preset:')) setAvatarMode('preset')
+    else if (isUrl(profile.avatar)) setAvatarMode('upload')
+    else setAvatarMode('emoji')
+    setEditing(true)
+  }
+
+  const saveProfile = () => {
+    const name = draftName.trim().slice(0, 24) || randomGuest()
+    const color = draftColor || pickColor()
+    const avatar = draftAvatar || 'preset:0'
+    const next: Profile = { name, color, avatar }
+    setProfile(next)
+    try {
+      window.localStorage.setItem(LS_KEY, JSON.stringify(next))
+    } catch {
+      /* ignore quota errors */
+    }
+    // emit immediately so the roster + future messages pick up the new identity
+    const sock = socketRef.current
+    if (sock && sock.connected) {
+      sock.emit('profile', { user: name, color, avatar })
+    }
+    setEditing(false)
+    toast.success('Profile saved', {
+      description: `You are now ${name}`,
+    })
+  }
+
+  const handleUpload = async (file: File) => {
+    setUploading(true)
+    try {
+      const url = await downscaleToDataUrl(file)
+      setDraftAvatar(url)
+      setAvatarMode('upload')
+      toast.success('Avatar ready')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'failed'
+      if (msg === 'too large') {
+        toast.error("Couldn't shrink image enough", {
+          description: 'Try a smaller or simpler image',
+        })
+      } else if (msg === 'not an image') {
+        toast.error('Please choose an image file')
+      } else {
+        toast.error('Could not load image')
+      }
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  // ---- messaging ----
+  const send = () => {
+    const value = input.trim().slice(0, 500)
+    if (!value) return
+    const sock = socketRef.current
+    if (!sock || !sock.connected) return
+    sock.emit('message', {
+      user: profile.name,
+      text: value,
+      color: profile.color,
+      avatar: profile.avatar,
+    })
+    if (typingClearRef.current) clearTimeout(typingClearRef.current)
+    setTypingUser(null)
+    sock.emit('typing', { user: profile.name, typing: false })
+    setInput('')
+  }
+
+  const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInput(e.target.value)
+    const sock = socketRef.current
+    if (sock && sock.connected && e.target.value.trim() && profile.name) {
+      sock.emit('typing', { user: profile.name, typing: true })
+    }
+  }
+
+  const presencePill = connected ? (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-inset ring-emerald-400/30">
+      <Circle className="h-2 w-2 fill-emerald-400 text-emerald-400 animate-pulse" />
+      {online} online
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-300 ring-1 ring-inset ring-amber-400/30">
+      <Radio className="h-3 w-3 animate-pulse" />
+      reconnecting…
+    </span>
+  )
+
+  const myName = profile.name
+  const rosterOthers = roster
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      transition={{ duration: 0.4, ease: 'easeOut' }}
+      className="mx-auto flex h-[78vh] w-full max-w-4xl overflow-hidden rounded-3xl glass glass-sheen"
+    >
+      {/* Channels sidebar */}
+      <aside className="hidden w-60 shrink-0 flex-col border-r border-white/10 bg-black/20 sm:flex">
+        <div className="flex items-center gap-2 border-b border-white/10 px-4 py-4">
+          <MessagesSquare className="h-4.5 w-4.5 text-fuchsia-200" />
+          <span className="text-sm font-semibold text-white">Channels</span>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2 glass-scroll">
+          {CHANNELS.map((r) => (
+            <button
+              key={r.id}
+              disabled={!r.live}
+              title={r.live ? 'Live channel' : 'Coming soon'}
+              className={cn(
+                'group mb-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors',
+                r.live
+                  ? 'bg-white/12 text-white'
+                  : 'cursor-not-allowed text-white/35 hover:bg-transparent',
+              )}
+            >
+              <Hash className="h-4 w-4 shrink-0 text-white/40" />
+              <span className="flex-1 truncate">{r.name}</span>
+              {r.live ? (
+                <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-emerald-300">
+                  <Circle className="h-1.5 w-1.5 fill-emerald-400 text-emerald-400" />
+                  live
+                </span>
+              ) : null}
+            </button>
+          ))}
+
+          {/* Online roster */}
+          <div className="mt-3 px-2">
+            <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[10px] font-bold uppercase tracking-wider text-white/40">
+              <Users className="h-3 w-3" />
+              <span>online — {rosterOthers.length}</span>
+            </div>
+            <div className="space-y-1">
+              <AnimatePresence initial={false}>
+                {rosterOthers.map((p) => {
+                  const me = p.user === myName && myName !== ''
+                  return (
+                    <motion.div
+                      key={p.id}
+                      layout
+                      initial={{ opacity: 0, x: -6 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -6 }}
+                      transition={{ duration: 0.18 }}
+                      className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/8"
+                    >
+                      <Avatar avatar={p.avatar} name={p.user} size="sm" />
+                      <span
+                        className={cn(
+                          'flex-1 truncate text-xs',
+                          me ? 'font-semibold' : 'font-medium',
+                          p.color,
+                        )}
+                      >
+                        {p.user}
+                        {me ? (
+                          <span className="ml-1 text-[10px] text-white/40">(you)</span>
+                        ) : null}
+                      </span>
+                    </motion.div>
+                  )
+                })}
+              </AnimatePresence>
+              {rosterOthers.length === 0 ? (
+                <p className="px-2 py-1 text-[11px] text-white/30">no one online</p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        {/* You + edit profile */}
+        <div className="border-t border-white/10 p-3">
+          <div className="flex items-center gap-2 rounded-xl glass-subtle px-2.5 py-2 text-xs text-white/60">
+            <Avatar avatar={profile.avatar} name={profile.name || 'guest'} size="sm" />
+            <span className="min-w-0 flex-1 truncate">
+              you are{' '}
+              <span className={cn('font-semibold', profile.color)}>
+                {profile.name || '…'}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={openEditor}
+              title="Edit profile"
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-white/60 transition-colors hover:bg-white/12 hover:text-white"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* Conversation */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+          <Hash className="h-5 w-5 text-white/40" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-white">general</span>
+              <span className="inline-flex items-center gap-1 text-[10px] text-emerald-300">
+                <Circle className="h-2 w-2 fill-emerald-400 text-emerald-400" /> live relay
+              </span>
+            </div>
+            <p className="truncate text-xs text-white/45">
+              {connected ? 'the live relay — open to all drifters' : 'connecting to relay…'}
+            </p>
+          </div>
+          {/* mobile: show edit profile since the sidebar is hidden */}
+          <button
+            type="button"
+            onClick={openEditor}
+            title="Edit profile"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl glass-subtle text-white/70 transition-colors hover:text-white sm:hidden"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+          {presencePill}
+        </header>
+
+        <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-5 py-4 glass-scroll">
+          {!connected && messages.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-white/45">
+              <Radio className="h-6 w-6 animate-pulse text-fuchsia-300" />
+              <p className="text-sm">connecting to relay…</p>
+              <p className="text-[11px] text-white/30">establishing websocket handshake</p>
+            </div>
+          ) : (
+            <AnimatePresence initial={false}>
+              {messages.map((m) => {
+                const mine = m.user === myName && myName !== ''
+                return (
+                  <motion.div
+                    key={m.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.25 }}
+                    className="flex items-start gap-3"
+                  >
+                    <Avatar avatar={m.avatar} name={m.user} size="md" />
+                    <div className="min-w-0">
+                      <div className="flex items-baseline gap-2">
+                        <span className={cn('text-sm font-semibold', m.color)}>
+                          {m.user}
+                          {mine ? <span className="ml-1 text-[10px] text-white/40">(you)</span> : null}
+                        </span>
+                        <span className="text-[10px] text-white/30">{formatTime(m.time)}</span>
+                      </div>
+                      <p className="text-sm leading-relaxed text-white/80">{m.text}</p>
+                    </div>
+                  </motion.div>
+                )
+              })}
+            </AnimatePresence>
+          )}
+
+          {/* typing indicator */}
+          <AnimatePresence>
+            {typingUser && typingUser !== myName ? (
+              <motion.div
+                key="typing"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                className="flex items-center gap-2 pl-12 text-xs text-white/45"
+              >
+                <span className="flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50 [animation-delay:-0.3s]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50 [animation-delay:-0.15s]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50" />
+                </span>
+                <span>
+                  <span className="font-semibold text-white/70">{typingUser}</span> is typing…
+                </span>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+        </div>
+
+        {/* Quick reactions */}
+        <div className="flex flex-wrap gap-1.5 px-5 pb-2">
+          {QUICK.map((q) => (
+            <button
+              key={q}
+              type="button"
+              onClick={() => setInput(q)}
+              className="rounded-full glass-subtle px-2.5 py-1 text-[11px] text-white/60 transition-colors hover:bg-white/15 hover:text-white"
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            send()
+          }}
+          className="flex items-center gap-2 border-t border-white/10 p-3"
+        >
+          <input
+            value={input}
+            onChange={onInputChange}
+            maxLength={500}
+            disabled={!connected}
+            placeholder={connected ? 'Message #general' : 'waiting for relay…'}
+            className="glass-subtle flex-1 rounded-xl border border-white/10 bg-transparent px-4 py-2.5 text-sm text-white placeholder:text-white/35 focus:border-fuchsia-400/40 focus:outline-none disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={!connected || !input.trim()}
+            className="glass-sheen grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 text-white transition-transform hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+          >
+            <Send className="h-4.5 w-4.5" />
+          </button>
+        </form>
+      </div>
+
+      {/* Profile editor modal */}
+      <AnimatePresence>
+        {editing ? (
+          <motion.div
+            key="overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+            onClick={() => setEditing(false)}
+          >
+            <motion.div
+              key="modal"
+              initial={{ opacity: 0, scale: 0.96, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 8 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md overflow-hidden rounded-2xl glass glass-sheen p-5 shadow-2xl"
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-fuchsia-200" />
+                  <h2 className="text-sm font-semibold text-white">Edit profile</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditing(false)}
+                  className="grid h-7 w-7 place-items-center rounded-lg text-white/60 hover:bg-white/10 hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* live preview */}
+              <div className="mb-4 flex items-center gap-3 rounded-xl glass-subtle p-3">
+                <Avatar avatar={draftAvatar} name={draftName || 'guest'} size="lg" />
+                <div className="min-w-0">
+                  <p className={cn('truncate text-sm font-semibold', draftColor || 'text-white')}>
+                    {draftName || 'guest'}
+                  </p>
+                  <p className="text-[11px] text-white/40">preview</p>
+                </div>
+              </div>
+
+              {/* display name */}
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-white/45">
+                Display name
+              </label>
+              <input
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value.slice(0, 24))}
+                maxLength={24}
+                placeholder="guest-1234"
+                className="mb-4 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/35 focus:border-fuchsia-400/40 focus:outline-none"
+              />
+
+              {/* color */}
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-white/45">
+                Color
+              </label>
+              <div className="mb-4 flex flex-wrap gap-2">
+                {COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setDraftColor(c)}
+                    className={cn(
+                      'grid h-7 w-7 place-items-center rounded-full ring-2 transition-transform hover:scale-110',
+                      c,
+                      draftColor === c ? 'ring-white/80' : 'ring-transparent',
+                    )}
+                    title={c}
+                  >
+                    {draftColor === c ? <Check className="h-3.5 w-3.5" /> : null}
+                  </button>
+                ))}
+              </div>
+
+              {/* avatar mode tabs */}
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-white/45">
+                Avatar
+              </label>
+              <div className="mb-3 grid grid-cols-3 gap-1 rounded-xl bg-black/30 p-1">
+                {([
+                  { id: 'preset', label: 'Preset', Icon: Sparkles },
+                  { id: 'emoji', label: 'Emoji', Icon: Smile },
+                  { id: 'upload', label: 'Upload', Icon: Upload },
+                ] as const).map(({ id, label, Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setAvatarMode(id)}
+                    className={cn(
+                      'flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-medium transition-colors',
+                      avatarMode === id
+                        ? 'bg-white/15 text-white'
+                        : 'text-white/55 hover:text-white',
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* avatar picker body */}
+              <div className="mb-4 min-h-[7rem]">
+                {avatarMode === 'preset' ? (
+                  <div className="grid grid-cols-8 gap-2">
+                    {PRESET_GRADIENTS.map((g, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setDraftAvatar(`preset:${i}`)}
+                        title={`Preset ${i + 1}`}
+                        className={cn(
+                          'grid aspect-square place-items-center rounded-full bg-gradient-to-br text-xs font-bold text-white transition-transform hover:scale-110',
+                          g,
+                          draftAvatar === `preset:${i}`
+                            ? 'ring-2 ring-white/90 ring-offset-2 ring-offset-black/40'
+                            : '',
+                        )}
+                      >
+                        {initialOf(draftName)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                {avatarMode === 'emoji' ? (
+                  <div className="grid grid-cols-8 gap-1.5">
+                    {EMOJIS.map((em, i) => (
+                      <button
+                        key={`${em}-${i}`}
+                        type="button"
+                        onClick={() => setDraftAvatar(em)}
+                        className={cn(
+                          'grid aspect-square place-items-center rounded-lg text-lg transition-colors hover:bg-white/12',
+                          draftAvatar === em
+                            ? 'bg-white/15 ring-2 ring-white/80'
+                            : '',
+                        )}
+                      >
+                        {em}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                {avatarMode === 'upload' ? (
+                  <div className="flex flex-col items-center gap-3">
+                    <label
+                      htmlFor="avatar-upload"
+                      className="flex w-full cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-white/20 bg-black/20 px-4 py-5 text-center transition-colors hover:border-fuchsia-400/40 hover:bg-white/5"
+                    >
+                      {uploading ? (
+                        <Radio className="h-5 w-5 animate-pulse text-fuchsia-300" />
+                      ) : (
+                        <ImageIcon className="h-5 w-5 text-white/50" />
+                      )}
+                      <span className="text-xs text-white/60">
+                        {uploading ? 'shrinking…' : 'click to choose an image'}
+                      </span>
+                      <span className="text-[10px] text-white/30">
+                        auto-downscaled to ≤{AVATAR_MAX} chars
+                      </span>
+                      <input
+                        id="avatar-upload"
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0]
+                          if (f) void handleUpload(f)
+                          e.target.value = ''
+                        }}
+                      />
+                    </label>
+                    {isUrl(draftAvatar) ? (
+                      <div className="flex items-center gap-2 text-xs text-white/60">
+                        <Avatar avatar={draftAvatar} name={draftName} size="sm" />
+                        <span>uploaded</span>
+                        <button
+                          type="button"
+                          onClick={() => setDraftAvatar('preset:0')}
+                          className="text-white/40 underline-offset-2 hover:text-white hover:underline"
+                        >
+                          remove
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+
+              {/* actions */}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditing(false)}
+                  className="flex-1 rounded-xl glass-subtle px-4 py-2 text-sm font-medium text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={saveProfile}
+                  className="flex-1 rounded-xl bg-gradient-to-br from-fuchsia-500/70 to-violet-600/70 px-4 py-2 text-sm font-semibold text-white transition-transform hover:scale-[1.02] active:scale-95"
+                >
+                  Save
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </motion.div>
+  )
+}
