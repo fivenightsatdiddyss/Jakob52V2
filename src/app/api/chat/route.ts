@@ -30,6 +30,7 @@ type RosterEntry = {
   color: string
   avatar: string
   lastSeen: number // epoch ms
+  channel?: string // which channel this user is currently viewing
 }
 
 type TypingEntry = {
@@ -182,6 +183,13 @@ export async function GET(req: NextRequest) {
     user: e.user,
   }))
 
+  // per-channel online counts — how many users are currently viewing each channel
+  const channelCounts: Record<string, number> = {}
+  for (const entry of Object.values(prunedRoster)) {
+    const ch = entry.channel || 'general'
+    channelCounts[ch] = (channelCounts[ch] || 0) + 1
+  }
+
   let filtered = safeMessages
   if (since) {
     const sinceDate = new Date(since)
@@ -202,6 +210,7 @@ export async function GET(req: NextRequest) {
       online,
       roster: rosterArr,
       typing: typingArr,
+      channelCounts,
     },
     { headers: noStore },
   )
@@ -323,6 +332,7 @@ export async function POST(req: NextRequest) {
       user?: unknown
       color?: unknown
       avatar?: unknown
+      channel?: unknown
     }
     const sessionId = trim(b.sessionId, MAX_SESSION_ID)
     if (!sessionId) {
@@ -334,13 +344,14 @@ export async function POST(req: NextRequest) {
     const user = trim(b.user, MAX_USER) || 'anon'
     const color = trim(b.color, MAX_COLOR)
     const avatar = trim(b.avatar, MAX_AVATAR)
+    const channel = (typeof b.channel === 'string' ? b.channel : 'general').replace(/[^a-z0-9-]/gi, '').slice(0, 24) || 'general'
     const roster = await readJSON<Record<string, RosterEntry>>(
       'roster',
       {},
     )
     const safeRoster =
       roster && typeof roster === 'object' ? roster : {}
-    safeRoster[sessionId] = { user, color, avatar, lastSeen: now }
+    safeRoster[sessionId] = { user, color, avatar, lastSeen: now, channel }
     const pruned = pruneRoster(safeRoster, now)
     await writeJSON('roster', pruned)
     return NextResponse.json(

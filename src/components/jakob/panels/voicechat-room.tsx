@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { getIceServers } from './ice-servers'
 
 type Profile = {
   name: string
@@ -46,25 +47,11 @@ type VoicechatRoomProps = {
 
 const POLL_INTERVAL_MS = 1200
 const PRESENCE_KEEPALIVE_MS = 8000
-const ICE_SERVERS: RTCIceServer[] = [
+
+// ICE servers fetched dynamically for fresh TURN credentials
+const DEFAULT_ICE: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
-  {
-    urls: 'turn:openrelay.metered.ca:80',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
 ]
 
 const TALK_THRESHOLD = 0.08 // RMS level above which a user is "talking"
@@ -111,6 +98,7 @@ export default function VoicechatRoom({ profile, sessionId }: VoicechatRoomProps
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const lastPresenceRef = useRef<number>(0)
   const mountedRef = useRef<boolean>(true)
+  const iceServersRef = useRef<RTCIceServer[]>(DEFAULT_ICE)
 
   const postSignal = useCallback((body: Record<string, unknown>) => {
     if (!mountedRef.current) return
@@ -176,7 +164,7 @@ export default function VoicechatRoom({ profile, sessionId }: VoicechatRoomProps
 
   const createPeerConnection = useCallback(
     (peerId: string): RTCPeerConnection => {
-      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
+      const pc = new RTCPeerConnection({ iceServers: iceServersRef.current })
       const stream = localStreamRef.current
       if (stream) {
         for (const track of stream.getTracks()) {
@@ -325,6 +313,8 @@ export default function VoicechatRoom({ profile, sessionId }: VoicechatRoomProps
       setupAnalyser(stream, 'local')
       setJoined(true)
       mountedRef.current = true
+      // Fetch fresh TURN credentials (async, non-blocking)
+      getIceServers().then((servers) => { iceServersRef.current = servers }).catch(() => {})
       sendPresence()
       void poll()
       pollTimerRef.current = setInterval(() => { void poll() }, POLL_INTERVAL_MS)

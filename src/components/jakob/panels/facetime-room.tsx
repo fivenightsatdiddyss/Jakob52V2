@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { getIceServers } from './ice-servers'
 
 type Profile = {
   name: string
@@ -48,31 +49,6 @@ type FacetimeRoomProps = {
 
 const POLL_INTERVAL_MS = 1200
 const PRESENCE_KEEPALIVE_MS = 8000
-const ICE_SERVERS: RTCIceServer[] = [
-  // Google STUN servers (NAT discovery)
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
-  { urls: 'stun:stun3.l.google.com:19302' },
-  { urls: 'stun:stun4.l.google.com:19302' },
-  // OpenRelay free TURN servers (relay for strict NATs / firewalls — critical
-  // for connections where STUN alone fails, e.g. school/corporate networks)
-  {
-    urls: 'turn:openrelay.metered.ca:80',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-]
 
 /** Generate a random 6-char room code. */
 function generateRoomCode(): string {
@@ -132,6 +108,10 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const lastPresenceRef = useRef<number>(0)
   const mountedRef = useRef<boolean>(true)
+  const iceServersRef = useRef<RTCIceServer[]>([
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ])
 
   // ---- POST helper ----
   const postSignal = useCallback((body: Record<string, unknown>) => {
@@ -159,7 +139,7 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
   // ---- create a peer connection for a remote peer ----
   const createPeerConnection = useCallback(
     (peerId: string): RTCPeerConnection => {
-      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
+      const pc = new RTCPeerConnection({ iceServers: iceServersRef.current })
       const stream = localStreamRef.current
       if (stream) {
         for (const track of stream.getTracks()) {
@@ -399,6 +379,8 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
       }
       setJoined(true)
       mountedRef.current = true
+      // Fetch fresh TURN credentials (async, non-blocking — uses STUN until ready)
+      getIceServers().then((servers) => { iceServersRef.current = servers }).catch(() => {})
       sendPresence()
       void poll()
       pollTimerRef.current = setInterval(() => {

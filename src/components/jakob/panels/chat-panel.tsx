@@ -62,6 +62,7 @@ type PollResponse = {
   online?: number
   roster?: RosterEntry[]
   typing?: TypingEntry[]
+  channelCounts?: Record<string, number>
 }
 
 // Channel list — general + random are live text channels; facetime is the
@@ -294,6 +295,7 @@ export default function ChatPanel() {
   const [input, setInput] = useState('')
   const [typingUser, setTypingUser] = useState<string | null>(null)
   const [roster, setRoster] = useState<RosterEntry[]>([])
+  const [channelCounts, setChannelCounts] = useState<Record<string, number>>({})
 
   // profile editor modal state
   const [editing, setEditing] = useState(false)
@@ -354,6 +356,7 @@ export default function ChatPanel() {
       user: p.name,
       color: p.color,
       avatar: p.avatar,
+      channel: activeChannelRef.current,
     })
     lastPresenceRef.current = Date.now()
   }
@@ -459,6 +462,7 @@ export default function ChatPanel() {
 
         if (typeof data.online === 'number') setOnline(data.online)
         if (Array.isArray(data.roster)) setRoster(data.roster)
+        if (data.channelCounts && typeof data.channelCounts === 'object') setChannelCounts(data.channelCounts)
 
         // typing indicator — only show someone else typing
         const typingArr = Array.isArray(data.typing) ? data.typing : []
@@ -522,6 +526,13 @@ export default function ChatPanel() {
     if (!profileLoaded) return
     sendPresence(profile)
   }, [profile, profileLoaded])
+
+  // re-broadcast presence when the active channel changes (so per-channel
+  // counts update immediately for everyone)
+  useEffect(() => {
+    if (!profileLoaded) return
+    sendPresence(profile)
+  }, [activeChannel, profileLoaded])
 
   // ---- auto-scroll on new message ----
   useEffect(() => {
@@ -757,6 +768,15 @@ export default function ChatPanel() {
                 <Hash className="h-4 w-4 shrink-0 text-white/40" />
               )}
               <span className="flex-1 truncate">{r.name}</span>
+              {(() => {
+                const count = channelCounts[r.id] || 0
+                if (count === 0) return null
+                return (
+                  <span className="shrink-0 rounded-full bg-white/8 px-1.5 text-[9px] font-bold tabular-nums text-white/50">
+                    {count}
+                  </span>
+                )
+              })()}
               {r.live ? (
                 <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-emerald-300">
                   <Circle className="h-1.5 w-1.5 fill-emerald-400 text-emerald-400" />
