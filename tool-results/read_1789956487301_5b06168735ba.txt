@@ -1,0 +1,1058 @@
+     1→'use client'
+     2→
+     3→import { useEffect, useRef, useState } from 'react'
+     4→import { motion, AnimatePresence } from 'framer-motion'
+     5→import {
+     6→  MessagesSquare,
+     7→  Send,
+     8→  Hash,
+     9→  Circle,
+    10→  Radio,
+    11→  Pencil,
+    12→  X,
+    13→  Upload,
+    14→  Sparkles,
+    15→  Smile,
+    16→  Image as ImageIcon,
+    17→  Check,
+    18→  Users,
+    19→} from 'lucide-react'
+    20→import { toast } from 'sonner'
+    21→import { cn } from '@/lib/utils'
+    22→
+    23→type ChatMsg = {
+    24→  id: string
+    25→  user: string
+    26→  text: string
+    27→  color: string
+    28→  avatar: string
+    29→  time: string
+    30→}
+    31→
+    32→type Profile = {
+    33→  name: string
+    34→  color: string
+    35→  avatar: string
+    36→}
+    37→
+    38→type RosterEntry = {
+    39→  id: string
+    40→  user: string
+    41→  color: string
+    42→  avatar: string
+    43→}
+    44→
+    45→type TypingEntry = {
+    46→  sessionId: string
+    47→  user: string
+    48→}
+    49→
+    50→type PollResponse = {
+    51→  messages?: ChatMsg[]
+    52→  online?: number
+    53→  roster?: RosterEntry[]
+    54→  typing?: TypingEntry[]
+    55→}
+    56→
+    57→// Decorative channel list — only `general` is the live, shared relay channel.
+    58→const CHANNELS = [
+    59→  { id: 'general', name: 'general', topic: 'the live relay — open to all drifters', live: true },
+    60→  { id: 'singularity', name: 'singularity', topic: 'black hole talk (coming soon)', live: false },
+    61→  { id: 'glass-design', name: 'glass-design', topic: 'liquid ui craft (coming soon)', live: false },
+    62→  { id: 'arcade', name: 'arcade', topic: 'high scores & runs (coming soon)', live: false },
+    63→  { id: 'proxy-lab', name: 'proxy-lab', topic: 'routing experiments (coming soon)', live: false },
+    64→]
+    65→
+    66→const QUICK = ['nice', 'lol', '+1', 'on it', '✦']
+    67→
+    68→const COLORS = [
+    69→  'text-fuchsia-300',
+    70→  'text-sky-300',
+    71→  'text-amber-300',
+    72→  'text-emerald-300',
+    73→  'text-rose-300',
+    74→  'text-violet-300',
+    75→  'text-cyan-300',
+    76→  'text-orange-300',
+    77→]
+    78→
+    79→// 8 gradient presets — avatar stored as "preset:N"
+    80→const PRESET_GRADIENTS = [
+    81→  'from-fuchsia-500 to-violet-600',
+    82→  'from-rose-500 to-orange-500',
+    83→  'from-sky-500 to-cyan-400',
+    84→  'from-emerald-500 to-teal-500',
+    85→  'from-amber-500 to-yellow-500',
+    86→  'from-pink-500 to-rose-600',
+    87→  'from-cyan-500 to-blue-500',
+    88→  'from-violet-500 to-purple-600',
+    89→]
+    90→
+    91→const EMOJIS = [
+    92→  '👾', '🦊', '🐙', '🦄', '🐲', '🌟',
+    93→  '🌌', '🚀', '🔮', '🎇', '🪐', '🤖',
+    94→  '🎉', '🍕', '🎮', '🎧', '📚', '⚡',
+    95→  '🔥', '💧', '🌈', '🐱', '🦉', '🐳',
+    96→]
+    97→
+    98→const LS_KEY = 'jakob52-chat-profile'
+    99→const SESSION_KEY = 'jakob52-chat-session'
+   100→const AVATAR_MAX = 400
+   101→const POLL_INTERVAL_MS = 1500
+   102→const PRESENCE_KEEPALIVE_MS = 10_000
+   103→const TYPING_THROTTLE_MS = 1000
+   104→const TYPING_CLIENT_TIMEOUT_MS = 3500
+   105→const CONNECT_STALE_MS = 5000
+   106→const OPTIMISTIC_PREFIX = 'local-'
+   107→
+   108→const randomGuest = () => {
+   109→  const n = Math.floor(1000 + Math.random() * 9000)
+   110→  return `guest-${n}`
+   111→}
+   112→
+   113→const pickColor = () => COLORS[Math.floor(Math.random() * COLORS.length)]
+   114→
+   115→const defaultProfile = (): Profile => ({
+   116→  name: '',
+   117→  color: pickColor(),
+   118→  avatar: 'preset:0',
+   119→})
+   120→
+   121→const formatTime = (iso: string) => {
+   122→  try {
+   123→    const d = new Date(iso)
+   124→    if (Number.isNaN(d.getTime())) return 'now'
+   125→    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+   126→  } catch {
+   127→    return 'now'
+   128→  }
+   129→}
+   130→
+   131→const initialOf = (name: string) =>
+   132→  (name || '?').trim().slice(0, 1).toUpperCase() || '?'
+   133→
+   134→// ---- avatar rendering helpers ----
+   135→const isUrl = (s: string) => s.startsWith('data:') || s.startsWith('http')
+   136→
+   137→const isEmoji = (s: string) => s.length > 0 && s.length <= 4 && !isUrl(s)
+   138→
+   139→const presetGradient = (avatar: string) => {
+   140→  const idx = Number.parseInt(avatar.slice('preset:'.length), 10)
+   141→  const safe = Number.isFinite(idx) ? idx : 0
+   142→  return PRESET_GRADIENTS[((safe % PRESET_GRADIENTS.length) + PRESET_GRADIENTS.length) % PRESET_GRADIENTS.length]
+   143→}
+   144→
+   145→// Renders an avatar circle based on the avatar encoding.
+   146→// size: 'sm' (28px sidebar/roster) | 'md' (36px messages) | 'lg' (48px editor preview)
+   147→function Avatar({
+   148→  avatar,
+   149→  name,
+   150→  size = 'md',
+   151→  className,
+   152→}: {
+   153→  avatar: string
+   154→  name: string
+   155→  size?: 'sm' | 'md' | 'lg'
+   156→  className?: string
+   157→}) {
+   158→  const dims =
+   159→    size === 'sm'
+   160→      ? 'h-7 w-7 text-xs'
+   161→      : size === 'lg'
+   162→        ? 'h-12 w-12 text-base'
+   163→        : 'h-9 w-9 text-sm'
+   164→  const initial = initialOf(name)
+   165→
+   166→  if (avatar.startsWith('preset:')) {
+   167→    return (
+   168→      <div
+   169→        className={cn(
+   170→          'grid shrink-0 place-items-center rounded-full bg-gradient-to-br font-bold text-white shadow-inner',
+   171→          dims,
+   172→          presetGradient(avatar),
+   173→          className,
+   174→        )}
+   175→      >
+   176→        {initial}
+   177→      </div>
+   178→    )
+   179→  }
+   180→
+   181→  if (isUrl(avatar)) {
+   182→    return (
+   183→      <img
+   184→        src={avatar}
+   185→        alt={name ? `${name} avatar` : 'avatar'}
+   186→        className={cn('shrink-0 rounded-full object-cover', dims, className)}
+   187→      />
+   188→    )
+   189→  }
+   190→
+   191→  if (isEmoji(avatar)) {
+   192→    return (
+   193→      <div
+   194→        className={cn(
+   195→          'grid shrink-0 place-items-center rounded-full bg-white/10 ring-1 ring-inset ring-white/15',
+   196→          dims,
+   197→          className,
+   198→        )}
+   199→      >
+   200→        <span className="leading-none">
+   201→          {size === 'lg' ? 'text-2xl' : size === 'sm' ? 'text-base' : 'text-lg'}
+   202→          {avatar}
+   203→        </span>
+   204→      </div>
+   205→    )
+   206→  }
+   207→
+   208→  // fallback → initial in a plain circle
+   209→  return (
+   210→    <div
+   211→      className={cn(
+   212→        'grid shrink-0 place-items-center rounded-full bg-white/10 font-bold text-white/80 ring-1 ring-inset ring-white/15',
+   213→        dims,
+   214→        className,
+   215→      )}
+   216→    >
+   217→      {initial}
+   218→    </div>
+   219→  )
+   220→}
+   221→
+   222→// Downscale an image file to a small data URL (≤ AVATAR_MAX chars).
+   223→// Tries progressively smaller sizes / lower qualities until it fits.
+   224→const downscaleToDataUrl = (file: File): Promise<string> =>
+   225→  new Promise((resolve, reject) => {
+   226→    if (!file.type.startsWith('image/')) {
+   227→      reject(new Error('not an image'))
+   228→      return
+   229→    }
+   230→    const reader = new FileReader()
+   231→    reader.onerror = () => reject(new Error('read failed'))
+   232→    reader.onload = () => {
+   233→      const img = new Image()
+   234→      img.onerror = () => reject(new Error('decode failed'))
+   235→      img.onload = () => {
+   236→        const minDim = Math.min(img.width, img.height) || 1
+   237→        const sx = (img.width - minDim) / 2
+   238→        const sy = (img.height - minDim) / 2
+   239→        const sizes = [64, 48, 40, 32, 28, 24]
+   240→        const qualities = [0.7, 0.5, 0.35, 0.25]
+   241→        for (const size of sizes) {
+   242→          for (const q of qualities) {
+   243→            const canvas = document.createElement('canvas')
+   244→            canvas.width = size
+   245→            canvas.height = size
+   246→            const ctx = canvas.getContext('2d')
+   247→            if (!ctx) continue
+   248→            ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size)
+   249→            const url = canvas.toDataURL('image/jpeg', q)
+   250→            if (url.length <= AVATAR_MAX) {
+   251→              resolve(url)
+   252→              return
+   253→            }
+   254→          }
+   255→        }
+   256→        reject(new Error('too large'))
+   257→      }
+   258→      img.src = reader.result as string
+   259→    }
+   260→    reader.readAsDataURL(file)
+   261→  })
+   262→
+   263→export default function ChatPanel() {
+   264→  // profile — starts as a default; loaded from localStorage (or generated) on mount
+   265→  const [profile, setProfile] = useState<Profile>(defaultProfile)
+   266→  const [profileLoaded, setProfileLoaded] = useState(false)
+   267→  // keep a ref so polling/keepalive callbacks always see the latest profile
+   268→  const profileRef = useRef<Profile>(profile)
+   269→  useEffect(() => {
+   270→    profileRef.current = profile
+   271→  }, [profile])
+   272→
+   273→  // chat state — updated from poll responses (external subscription)
+   274→  const [messages, setMessages] = useState<ChatMsg[]>([])
+   275→  const [online, setOnline] = useState(0)
+   276→  const [connected, setConnected] = useState(false)
+   277→  const [input, setInput] = useState('')
+   278→  const [typingUser, setTypingUser] = useState<string | null>(null)
+   279→  const [roster, setRoster] = useState<RosterEntry[]>([])
+   280→
+   281→  // profile editor modal state
+   282→  const [editing, setEditing] = useState(false)
+   283→  const [draftName, setDraftName] = useState('')
+   284→  const [draftColor, setDraftColor] = useState('')
+   285→  const [draftAvatar, setDraftAvatar] = useState('')
+   286→  const [avatarMode, setAvatarMode] = useState<'preset' | 'emoji' | 'upload'>('preset')
+   287→  const [uploading, setUploading] = useState(false)
+   288→
+   289→  const scrollRef = useRef<HTMLDivElement>(null)
+   290→  const sessionIdRef = useRef<string>('')
+   291→  const lastMessageTimeRef = useRef<string>('')
+   292→  const lastPollSuccessRef = useRef<number>(0)
+   293→  const lastPresenceRef = useRef<number>(0)
+   294→  const typingThrottleRef = useRef<number>(0)
+   295→  const typingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+   296→  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+   297→  const mountedRef = useRef<boolean>(true)
+   298→
+   299→  // ---- POST helper (best-effort, fire-and-forget) ----
+   300→  const postChat = (body: Record<string, unknown>) => {
+   301→    if (!mountedRef.current) return
+   302→    void fetch('/api/chat', {
+   303→      method: 'POST',
+   304→      headers: { 'content-type': 'application/json' },
+   305→      body: JSON.stringify(body),
+   306→      keepalive: true,
+   307→    }).catch(() => {
+   308→      /* swallow — polling will reconcile */
+   309→    })
+   310→  }
+   311→
+   312→  const sendPresence = (p: Profile) => {
+   313→    const sid = sessionIdRef.current
+   314→    if (!sid || !p.name) return
+   315→    postChat({
+   316→      op: 'presence',
+   317→      sessionId: sid,
+   318→      user: p.name,
+   319→      color: p.color,
+   320→      avatar: p.avatar,
+   321→    })
+   322→    lastPresenceRef.current = Date.now()
+   323→  }
+   324→
+   325→  // ---- load profile + session on mount, start polling ----
+   326→  useEffect(() => {
+   327→    if (typeof window === 'undefined') return
+   328→    mountedRef.current = true
+   329→
+   330→    // load profile from localStorage (or generate a fresh guest)
+   331→    let loaded: Profile | null = null
+   332→    try {
+   333→      const raw = window.localStorage.getItem(LS_KEY)
+   334→      if (raw) {
+   335→        const parsed = JSON.parse(raw) as Partial<Profile>
+   336→        if (parsed && typeof parsed === 'object') {
+   337→          loaded = {
+   338→            name:
+   339→              typeof parsed.name === 'string'
+   340→                ? parsed.name.slice(0, 24).trim() || randomGuest()
+   341→                : randomGuest(),
+   342→            color:
+   343→              typeof parsed.color === 'string' && parsed.color
+   344→                ? parsed.color.slice(0, 40)
+   345→                : pickColor(),
+   346→            avatar:
+   347→              typeof parsed.avatar === 'string' && parsed.avatar
+   348→                ? parsed.avatar.slice(0, AVATAR_MAX)
+   349→                : 'preset:0',
+   350→          }
+   351→        }
+   352→      }
+   353→    } catch {
+   354→      loaded = null
+   355→    }
+   356→    if (!loaded) {
+   357→      loaded = { name: randomGuest(), color: pickColor(), avatar: 'preset:0' }
+   358→    }
+   359→    setProfile(loaded)
+   360→    profileRef.current = loaded
+   361→    setProfileLoaded(true)
+   362→
+   363→    // stable session id — persists across refresh within the same browser tab
+   364→    let sid = ''
+   365→    try {
+   366→      sid = window.sessionStorage.getItem(SESSION_KEY) || ''
+   367→      if (!sid) {
+   368→        sid = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+   369→        window.sessionStorage.setItem(SESSION_KEY, sid)
+   370→      }
+   371→    } catch {
+   372→      sid = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+   373→    }
+   374→    sessionIdRef.current = sid
+   375→
+   376→    // initial presence so the roster sees us immediately
+   377→    sendPresence(loaded)
+   378→
+   379→    // ---- polling loop ----
+   380→    const poll = async () => {
+   381→      if (!mountedRef.current) return
+   382→      const sid2 = sessionIdRef.current
+   383→      const p = profileRef.current
+   384→      const since = lastMessageTimeRef.current
+   385→      try {
+   386→        const url = `/api/chat?since=${encodeURIComponent(since)}`
+   387→        const res = await fetch(url, { cache: 'no-store' })
+   388→        if (!res.ok) throw new Error(`http ${res.status}`)
+   389→        const data = (await res.json()) as PollResponse
+   390→        if (!mountedRef.current) return
+   391→        lastPollSuccessRef.current = Date.now()
+   392→        setConnected(true)
+   393→
+   394→        // merge messages — dedupe by id; replace optimistic local messages
+   395→        const newMsgs = Array.isArray(data.messages) ? data.messages : []
+   396→        if (newMsgs.length > 0) {
+   397→          setMessages((prev) => {
+   398→            const result = [...prev]
+   399→            for (const server of newMsgs) {
+   400→              if (result.some((m) => m.id === server.id)) continue
+   401→              const serverT = new Date(server.time).getTime()
+   402→              const localIdx = result.findIndex(
+   403→                (m) =>
+   404→                  m.id.startsWith(OPTIMISTIC_PREFIX) &&
+   405→                  m.user === server.user &&
+   406→                  m.text === server.text &&
+   407→                  Math.abs(new Date(m.time).getTime() - serverT) < 5000,
+   408→              )
+   409→              if (localIdx >= 0) result[localIdx] = server
+   410→              else result.push(server)
+   411→            }
+   412→            const latest = result[result.length - 1]
+   413→            if (latest) {
+   414→              const latestT = new Date(latest.time).getTime()
+   415→              const curT = new Date(lastMessageTimeRef.current).getTime()
+   416→              if (Number.isNaN(curT) || latestT > curT) {
+   417→                lastMessageTimeRef.current = latest.time
+   418→              }
+   419→            }
+   420→            return result.slice(-100)
+   421→          })
+   422→        }
+   423→
+   424→        if (typeof data.online === 'number') setOnline(data.online)
+   425→        if (Array.isArray(data.roster)) setRoster(data.roster)
+   426→
+   427→        // typing indicator — only show someone else typing
+   428→        const typingArr = Array.isArray(data.typing) ? data.typing : []
+   429→        const other = typingArr.find((t) => t.sessionId !== sid2)
+   430→        setTypingUser(other ? other.user : null)
+   431→        if (other && typingClearRef.current == null) {
+   432→          typingClearRef.current = setTimeout(() => {
+   433→            setTypingUser(null)
+   434→            typingClearRef.current = null
+   435→          }, TYPING_CLIENT_TIMEOUT_MS)
+   436→        } else if (!other && typingClearRef.current) {
+   437→          clearTimeout(typingClearRef.current)
+   438→          typingClearRef.current = null
+   439→        }
+   440→
+   441→        // presence keepalive — piggyback on the polling loop
+   442→        if (Date.now() - lastPresenceRef.current > PRESENCE_KEEPALIVE_MS) {
+   443→          sendPresence(p)
+   444→        }
+   445→      } catch {
+   446→        if (!mountedRef.current) return
+   447→        const stale = Date.now() - lastPollSuccessRef.current > CONNECT_STALE_MS
+   448→        setConnected(!stale)
+   449→      }
+   450→    }
+   451→    void poll()
+   452→    pollTimerRef.current = setInterval(() => {
+   453→      void poll()
+   454→    }, POLL_INTERVAL_MS)
+   455→
+   456→    return () => {
+   457→      mountedRef.current = false
+   458→      if (pollTimerRef.current) clearInterval(pollTimerRef.current)
+   459→      pollTimerRef.current = null
+   460→      if (typingClearRef.current) clearTimeout(typingClearRef.current)
+   461→      typingClearRef.current = null
+   462→      // best-effort: clear typing indicator so others don't see us typing forever
+   463→      const sid2 = sessionIdRef.current
+   464→      const p = profileRef.current
+   465→      if (sid2 && p.name) {
+   466→        void fetch('/api/chat', {
+   467→          method: 'POST',
+   468→          headers: { 'content-type': 'application/json' },
+   469→          body: JSON.stringify({
+   470→            op: 'typing',
+   471→            sessionId: sid2,
+   472→            user: p.name,
+   473→            typing: false,
+   474→          }),
+   475→          keepalive: true,
+   476→        }).catch(() => {
+   477→          /* swallow */
+   478→        })
+   479→      }
+   480→    }
+   481→  }, [])
+   482→
+   483→  // re-broadcast presence whenever the profile changes (so the roster
+   484→  // updates live with the new name/color/avatar)
+   485→  useEffect(() => {
+   486→    if (!profileLoaded) return
+   487→    sendPresence(profile)
+   488→  }, [profile, profileLoaded])
+   489→
+   490→  // ---- auto-scroll on new message ----
+   491→  useEffect(() => {
+   492→    const el = scrollRef.current
+   493→    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+   494→  }, [messages.length])
+   495→
+   496→  // ---- profile editor helpers ----
+   497→  const openEditor = () => {
+   498→    setDraftName(profile.name)
+   499→    setDraftColor(profile.color)
+   500→    setDraftAvatar(profile.avatar)
+   501→    if (profile.avatar.startsWith('preset:')) setAvatarMode('preset')
+   502→    else if (isUrl(profile.avatar)) setAvatarMode('upload')
+   503→    else setAvatarMode('emoji')
+   504→    setEditing(true)
+   505→  }
+   506→
+   507→  const saveProfile = () => {
+   508→    const name = draftName.trim().slice(0, 24) || randomGuest()
+   509→    const color = draftColor || pickColor()
+   510→    const avatar = draftAvatar || 'preset:0'
+   511→    const next: Profile = { name, color, avatar }
+   512→    setProfile(next)
+   513→    profileRef.current = next
+   514→    try {
+   515→      window.localStorage.setItem(LS_KEY, JSON.stringify(next))
+   516→    } catch {
+   517→      /* ignore quota errors */
+   518→    }
+   519→    setEditing(false)
+   520→    toast.success('Profile saved', {
+   521→      description: `You are now ${name}`,
+   522→    })
+   523→  }
+   524→
+   525→  const handleUpload = async (file: File) => {
+   526→    setUploading(true)
+   527→    try {
+   528→      const url = await downscaleToDataUrl(file)
+   529→      setDraftAvatar(url)
+   530→      setAvatarMode('upload')
+   531→      toast.success('Avatar ready')
+   532→    } catch (err) {
+   533→      const msg = err instanceof Error ? err.message : 'failed'
+   534→      if (msg === 'too large') {
+   535→        toast.error("Couldn't shrink image enough", {
+   536→          description: 'Try a smaller or simpler image',
+   537→        })
+   538→      } else if (msg === 'not an image') {
+   539→        toast.error('Please choose an image file')
+   540→      } else {
+   541→        toast.error('Could not load image')
+   542→      }
+   543→    } finally {
+   544→      setUploading(false)
+   545→    }
+   546→  }
+   547→
+   548→  // ---- messaging ----
+   549→  const send = () => {
+   550→    const value = input.trim().slice(0, 500)
+   551→    if (!value) return
+   552→    const p = profileRef.current
+   553→    if (!p.name) return
+   554→    // optimistic append — the next poll will reconcile/replace with the server copy
+   555→    const optimistic: ChatMsg = {
+   556→      id: `${OPTIMISTIC_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+   557→      user: p.name,
+   558→      text: value,
+   559→      color: p.color,
+   560→      avatar: p.avatar,
+   561→      time: new Date().toISOString(),
+   562→    }
+   563→    setMessages((prev) => [...prev, optimistic])
+   564→    postChat({
+   565→      op: 'message',
+   566→      user: p.name,
+   567→      text: value,
+   568→      color: p.color,
+   569→      avatar: p.avatar,
+   570→    })
+   571→    // clear typing indicator
+   572→    if (typingClearRef.current) clearTimeout(typingClearRef.current)
+   573→    typingClearRef.current = null
+   574→    setTypingUser(null)
+   575→    const sid = sessionIdRef.current
+   576→    if (sid) {
+   577→      postChat({ op: 'typing', sessionId: sid, user: p.name, typing: false })
+   578→    }
+   579→    setInput('')
+   580→  }
+   581→
+   582→  const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+   583→    setInput(e.target.value)
+   584→    const p = profileRef.current
+   585→    const sid = sessionIdRef.current
+   586→    if (!sid || !p.name) return
+   587→    if (!e.target.value.trim()) return
+   588→    const now = Date.now()
+   589→    if (now - typingThrottleRef.current < TYPING_THROTTLE_MS) return
+   590→    typingThrottleRef.current = now
+   591→    postChat({ op: 'typing', sessionId: sid, user: p.name, typing: true })
+   592→  }
+   593→
+   594→  const presencePill = connected ? (
+   595→    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-inset ring-emerald-400/30">
+   596→      <Circle className="h-2 w-2 fill-emerald-400 text-emerald-400 animate-pulse" />
+   597→      {online} online
+   598→    </span>
+   599→  ) : (
+   600→    <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-300 ring-1 ring-inset ring-amber-400/30">
+   601→      <Radio className="h-3 w-3 animate-pulse" />
+   602→      reconnecting…
+   603→    </span>
+   604→  )
+   605→
+   606→  const myName = profile.name
+   607→
+   608→  return (
+   609→    <motion.div
+   610→      initial={{ opacity: 0, y: 18 }}
+   611→      animate={{ opacity: 1, y: 0 }}
+   612→      exit={{ opacity: 0, y: -10 }}
+   613→      transition={{ duration: 0.4, ease: 'easeOut' }}
+   614→      className="mx-auto flex h-[78vh] w-full max-w-4xl overflow-hidden rounded-3xl glass glass-sheen"
+   615→    >
+   616→      {/* Channels sidebar */}
+   617→      <aside className="hidden w-60 shrink-0 flex-col border-r border-white/10 bg-black/20 sm:flex">
+   618→        <div className="flex items-center gap-2 border-b border-white/10 px-4 py-4">
+   619→          <MessagesSquare className="h-4.5 w-4.5 text-fuchsia-200" />
+   620→          <span className="text-sm font-semibold text-white">Channels</span>
+   621→        </div>
+   622→        <div className="flex-1 overflow-y-auto p-2 glass-scroll">
+   623→          {CHANNELS.map((r) => (
+   624→            <button
+   625→              key={r.id}
+   626→              disabled={!r.live}
+   627→              title={r.live ? 'Live channel' : 'Coming soon'}
+   628→              className={cn(
+   629→                'group mb-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors',
+   630→                r.live
+   631→                  ? 'bg-white/12 text-white'
+   632→                  : 'cursor-not-allowed text-white/35 hover:bg-transparent',
+   633→              )}
+   634→            >
+   635→              <Hash className="h-4 w-4 shrink-0 text-white/40" />
+   636→              <span className="flex-1 truncate">{r.name}</span>
+   637→              {r.live ? (
+   638→                <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-emerald-300">
+   639→                  <Circle className="h-1.5 w-1.5 fill-emerald-400 text-emerald-400" />
+   640→                  live
+   641→                </span>
+   642→              ) : null}
+   643→            </button>
+   644→          ))}
+   645→
+   646→          {/* Online roster */}
+   647→          <div className="mt-3 px-2">
+   648→            <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[10px] font-bold uppercase tracking-wider text-white/40">
+   649→              <Users className="h-3 w-3" />
+   650→              <span>online — {roster.length}</span>
+   651→            </div>
+   652→            <div className="space-y-1">
+   653→              <AnimatePresence initial={false}>
+   654→                {roster.map((p) => {
+   655→                  const me = p.user === myName && myName !== ''
+   656→                  return (
+   657→                    <motion.div
+   658→                      key={p.id}
+   659→                      layout
+   660→                      initial={{ opacity: 0, x: -6 }}
+   661→                      animate={{ opacity: 1, x: 0 }}
+   662→                      exit={{ opacity: 0, x: -6 }}
+   663→                      transition={{ duration: 0.18 }}
+   664→                      className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/8"
+   665→                    >
+   666→                      <Avatar avatar={p.avatar} name={p.user} size="sm" />
+   667→                      <span
+   668→                        className={cn(
+   669→                          'flex-1 truncate text-xs',
+   670→                          me ? 'font-semibold' : 'font-medium',
+   671→                          p.color,
+   672→                        )}
+   673→                      >
+   674→                        {p.user}
+   675→                        {me ? (
+   676→                          <span className="ml-1 text-[10px] text-white/40">(you)</span>
+   677→                        ) : null}
+   678→                      </span>
+   679→                    </motion.div>
+   680→                  )
+   681→                })}
+   682→              </AnimatePresence>
+   683→              {roster.length === 0 ? (
+   684→                <p className="px-2 py-1 text-[11px] text-white/30">no one online</p>
+   685→              ) : null}
+   686→            </div>
+   687→          </div>
+   688→        </div>
+   689→
+   690→        {/* You + edit profile */}
+   691→        <div className="border-t border-white/10 p-3">
+   692→          <div className="flex items-center gap-2 rounded-xl glass-subtle px-2.5 py-2 text-xs text-white/60">
+   693→            <Avatar avatar={profile.avatar} name={profile.name || 'guest'} size="sm" />
+   694→            <span className="min-w-0 flex-1 truncate">
+   695→              you are{' '}
+   696→              <span className={cn('font-semibold', profile.color)}>
+   697→                {profile.name || '…'}
+   698→              </span>
+   699→            </span>
+   700→            <button
+   701→              type="button"
+   702→              onClick={openEditor}
+   703→              title="Edit profile"
+   704→              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-white/60 transition-colors hover:bg-white/12 hover:text-white"
+   705→            >
+   706→              <Pencil className="h-3.5 w-3.5" />
+   707→            </button>
+   708→          </div>
+   709→        </div>
+   710→      </aside>
+   711→
+   712→      {/* Conversation */}
+   713→      <div className="flex min-w-0 flex-1 flex-col">
+   714→        <header className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+   715→          <Hash className="h-5 w-5 text-white/40" />
+   716→          <div className="min-w-0 flex-1">
+   717→            <div className="flex items-center gap-2">
+   718→              <span className="text-sm font-semibold text-white">general</span>
+   719→              <span className="inline-flex items-center gap-1 text-[10px] text-emerald-300">
+   720→                <Circle className="h-2 w-2 fill-emerald-400 text-emerald-400" /> live relay
+   721→              </span>
+   722→            </div>
+   723→            <p className="truncate text-xs text-white/45">
+   724→              {connected ? 'the live relay — open to all drifters' : 'connecting to relay…'}
+   725→            </p>
+   726→          </div>
+   727→          {/* mobile: show edit profile since the sidebar is hidden */}
+   728→          <button
+   729→            type="button"
+   730→            onClick={openEditor}
+   731→            title="Edit profile"
+   732→            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl glass-subtle text-white/70 transition-colors hover:text-white sm:hidden"
+   733→          >
+   734→            <Pencil className="h-4 w-4" />
+   735→          </button>
+   736→          {presencePill}
+   737→        </header>
+   738→
+   739→        <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-5 py-4 glass-scroll">
+   740→          {!connected && messages.length === 0 ? (
+   741→            <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-white/45">
+   742→              <Radio className="h-6 w-6 animate-pulse text-fuchsia-300" />
+   743→              <p className="text-sm">connecting to relay…</p>
+   744→              <p className="text-[11px] text-white/30">polling for messages</p>
+   745→            </div>
+   746→          ) : (
+   747→            <AnimatePresence initial={false}>
+   748→              {messages.map((m) => {
+   749→                const mine = m.user === myName && myName !== ''
+   750→                return (
+   751→                  <motion.div
+   752→                    key={m.id}
+   753→                    initial={{ opacity: 0, y: 10 }}
+   754→                    animate={{ opacity: 1, y: 0 }}
+   755→                    transition={{ duration: 0.25 }}
+   756→                    className="flex items-start gap-3"
+   757→                  >
+   758→                    <Avatar avatar={m.avatar} name={m.user} size="md" />
+   759→                    <div className="min-w-0">
+   760→                      <div className="flex items-baseline gap-2">
+   761→                        <span className={cn('text-sm font-semibold', m.color)}>
+   762→                          {m.user}
+   763→                          {mine ? <span className="ml-1 text-[10px] text-white/40">(you)</span> : null}
+   764→                        </span>
+   765→                        <span className="text-[10px] text-white/30">{formatTime(m.time)}</span>
+   766→                      </div>
+   767→                      <p className="text-sm leading-relaxed text-white/80">{m.text}</p>
+   768→                    </div>
+   769→                  </motion.div>
+   770→                )
+   771→              })}
+   772→            </AnimatePresence>
+   773→          )}
+   774→
+   775→          {/* typing indicator */}
+   776→          <AnimatePresence>
+   777→            {typingUser && typingUser !== myName ? (
+   778→              <motion.div
+   779→                key="typing"
+   780→                initial={{ opacity: 0, y: 6 }}
+   781→                animate={{ opacity: 1, y: 0 }}
+   782→                exit={{ opacity: 0, y: -4 }}
+   783→                className="flex items-center gap-2 pl-12 text-xs text-white/45"
+   784→              >
+   785→                <span className="flex items-center gap-1">
+   786→                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50 [animation-delay:-0.3s]" />
+   787→                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50 [animation-delay:-0.15s]" />
+   788→                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50" />
+   789→                </span>
+   790→                <span>
+   791→                  <span className="font-semibold text-white/70">{typingUser}</span> is typing…
+   792→                </span>
+   793→              </motion.div>
+   794→            ) : null}
+   795→          </AnimatePresence>
+   796→        </div>
+   797→
+   798→        {/* Quick reactions */}
+   799→        <div className="flex flex-wrap gap-1.5 px-5 pb-2">
+   800→          {QUICK.map((q) => (
+   801→            <button
+   802→              key={q}
+   803→              type="button"
+   804→              onClick={() => setInput(q)}
+   805→              className="rounded-full glass-subtle px-2.5 py-1 text-[11px] text-white/60 transition-colors hover:bg-white/15 hover:text-white"
+   806→            >
+   807→              {q}
+   808→            </button>
+   809→          ))}
+   810→        </div>
+   811→
+   812→        <form
+   813→          onSubmit={(e) => {
+   814→            e.preventDefault()
+   815→            send()
+   816→          }}
+   817→          className="flex items-center gap-2 border-t border-white/10 p-3"
+   818→        >
+   819→          <input
+   820→            value={input}
+   821→            onChange={onInputChange}
+   822→            maxLength={500}
+   823→            disabled={!connected}
+   824→            placeholder={connected ? 'Message #general' : 'waiting for relay…'}
+   825→            className="glass-subtle flex-1 rounded-xl border border-white/10 bg-transparent px-4 py-2.5 text-sm text-white placeholder:text-white/35 focus:border-fuchsia-400/40 focus:outline-none disabled:opacity-50"
+   826→          />
+   827→          <button
+   828→            type="submit"
+   829→            disabled={!connected || !input.trim()}
+   830→            className="glass-sheen grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 text-white transition-transform hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+   831→          >
+   832→            <Send className="h-4.5 w-4.5" />
+   833→          </button>
+   834→        </form>
+   835→      </div>
+   836→
+   837→      {/* Profile editor modal */}
+   838→      <AnimatePresence>
+   839→        {editing ? (
+   840→          <motion.div
+   841→            key="overlay"
+   842→            initial={{ opacity: 0 }}
+   843→            animate={{ opacity: 1 }}
+   844→            exit={{ opacity: 0 }}
+   845→            transition={{ duration: 0.2 }}
+   846→            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+   847→            onClick={() => setEditing(false)}
+   848→          >
+   849→            <motion.div
+   850→              key="modal"
+   851→              initial={{ opacity: 0, scale: 0.96, y: 8 }}
+   852→              animate={{ opacity: 1, scale: 1, y: 0 }}
+   853→              exit={{ opacity: 0, scale: 0.96, y: 8 }}
+   854→              transition={{ duration: 0.2, ease: 'easeOut' }}
+   855→              onClick={(e) => e.stopPropagation()}
+   856→              className="w-full max-w-md overflow-hidden rounded-2xl glass glass-sheen p-5 shadow-2xl"
+   857→            >
+   858→              <div className="mb-4 flex items-center justify-between">
+   859→                <div className="flex items-center gap-2">
+   860→                  <Sparkles className="h-4 w-4 text-fuchsia-200" />
+   861→                  <h2 className="text-sm font-semibold text-white">Edit profile</h2>
+   862→                </div>
+   863→                <button
+   864→                  type="button"
+   865→                  onClick={() => setEditing(false)}
+   866→                  className="grid h-7 w-7 place-items-center rounded-lg text-white/60 hover:bg-white/10 hover:text-white"
+   867→                >
+   868→                  <X className="h-4 w-4" />
+   869→                </button>
+   870→              </div>
+   871→
+   872→              {/* live preview */}
+   873→              <div className="mb-4 flex items-center gap-3 rounded-xl glass-subtle p-3">
+   874→                <Avatar avatar={draftAvatar} name={draftName || 'guest'} size="lg" />
+   875→                <div className="min-w-0">
+   876→                  <p className={cn('truncate text-sm font-semibold', draftColor || 'text-white')}>
+   877→                    {draftName || 'guest'}
+   878→                  </p>
+   879→                  <p className="text-[11px] text-white/40">preview</p>
+   880→                </div>
+   881→              </div>
+   882→
+   883→              {/* display name */}
+   884→              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-white/45">
+   885→                Display name
+   886→              </label>
+   887→              <input
+   888→                value={draftName}
+   889→                onChange={(e) => setDraftName(e.target.value.slice(0, 24))}
+   890→                maxLength={24}
+   891→                placeholder="guest-1234"
+   892→                className="mb-4 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/35 focus:border-fuchsia-400/40 focus:outline-none"
+   893→              />
+   894→
+   895→              {/* color */}
+   896→              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-white/45">
+   897→                Color
+   898→              </label>
+   899→              <div className="mb-4 flex flex-wrap gap-2">
+   900→                {COLORS.map((c) => (
+   901→                  <button
+   902→                    key={c}
+   903→                    type="button"
+   904→                    onClick={() => setDraftColor(c)}
+   905→                    className={cn(
+   906→                      'grid h-7 w-7 place-items-center rounded-full ring-2 transition-transform hover:scale-110',
+   907→                      c,
+   908→                      draftColor === c ? 'ring-white/80' : 'ring-transparent',
+   909→                    )}
+   910→                    title={c}
+   911→                  >
+   912→                    {draftColor === c ? <Check className="h-3.5 w-3.5" /> : null}
+   913→                  </button>
+   914→                ))}
+   915→              </div>
+   916→
+   917→              {/* avatar mode tabs */}
+   918→              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-white/45">
+   919→                Avatar
+   920→              </label>
+   921→              <div className="mb-3 grid grid-cols-3 gap-1 rounded-xl bg-black/30 p-1">
+   922→                {([
+   923→                  { id: 'preset', label: 'Preset', Icon: Sparkles },
+   924→                  { id: 'emoji', label: 'Emoji', Icon: Smile },
+   925→                  { id: 'upload', label: 'Upload', Icon: Upload },
+   926→                ] as const).map(({ id, label, Icon }) => (
+   927→                  <button
+   928→                    key={id}
+   929→                    type="button"
+   930→                    onClick={() => setAvatarMode(id)}
+   931→                    className={cn(
+   932→                      'flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-medium transition-colors',
+   933→                      avatarMode === id
+   934→                        ? 'bg-white/15 text-white'
+   935→                        : 'text-white/55 hover:text-white',
+   936→                    )}
+   937→                  >
+   938→                    <Icon className="h-3.5 w-3.5" />
+   939→                    {label}
+   940→                  </button>
+   941→                ))}
+   942→              </div>
+   943→
+   944→              {/* avatar picker body */}
+   945→              <div className="mb-4 min-h-[7rem]">
+   946→                {avatarMode === 'preset' ? (
+   947→                  <div className="grid grid-cols-8 gap-2">
+   948→                    {PRESET_GRADIENTS.map((g, i) => (
+   949→                      <button
+   950→                        key={i}
+   951→                        type="button"
+   952→                        onClick={() => setDraftAvatar(`preset:${i}`)}
+   953→                        title={`Preset ${i + 1}`}
+   954→                        className={cn(
+   955→                          'grid aspect-square place-items-center rounded-full bg-gradient-to-br text-xs font-bold text-white transition-transform hover:scale-110',
+   956→                          g,
+   957→                          draftAvatar === `preset:${i}`
+   958→                            ? 'ring-2 ring-white/90 ring-offset-2 ring-offset-black/40'
+   959→                            : '',
+   960→                        )}
+   961→                      >
+   962→                        {initialOf(draftName)}
+   963→                      </button>
+   964→                    ))}
+   965→                  </div>
+   966→                ) : null}
+   967→
+   968→                {avatarMode === 'emoji' ? (
+   969→                  <div className="grid grid-cols-8 gap-1.5">
+   970→                    {EMOJIS.map((em, i) => (
+   971→                      <button
+   972→                        key={`${em}-${i}`}
+   973→                        type="button"
+   974→                        onClick={() => setDraftAvatar(em)}
+   975→                        className={cn(
+   976→                          'grid aspect-square place-items-center rounded-lg text-lg transition-colors hover:bg-white/12',
+   977→                          draftAvatar === em
+   978→                            ? 'bg-white/15 ring-2 ring-white/80'
+   979→                            : '',
+   980→                        )}
+   981→                      >
+   982→                        {em}
+   983→                      </button>
+   984→                    ))}
+   985→                  </div>
+   986→                ) : null}
+   987→
+   988→                {avatarMode === 'upload' ? (
+   989→                  <div className="flex flex-col items-center gap-3">
+   990→                    <label
+   991→                      htmlFor="avatar-upload"
+   992→                      className="flex w-full cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-white/20 bg-black/20 px-4 py-5 text-center transition-colors hover:border-fuchsia-400/40 hover:bg-white/5"
+   993→                    >
+   994→                      {uploading ? (
+   995→                        <Radio className="h-5 w-5 animate-pulse text-fuchsia-300" />
+   996→                      ) : (
+   997→                        <ImageIcon className="h-5 w-5 text-white/50" />
+   998→                      )}
+   999→                      <span className="text-xs text-white/60">
+  1000→                        {uploading ? 'shrinking…' : 'click to choose an image'}
+  1001→                      </span>
+  1002→                      <span className="text-[10px] text-white/30">
+  1003→                        auto-downscaled to ≤{AVATAR_MAX} chars
+  1004→                      </span>
+  1005→                      <input
+  1006→                        id="avatar-upload"
+  1007→                        type="file"
+  1008→                        accept="image/*"
+  1009→                        className="hidden"
+  1010→                        onChange={(e) => {
+  1011→                          const f = e.target.files?.[0]
+  1012→                          if (f) void handleUpload(f)
+  1013→                          e.target.value = ''
+  1014→                        }}
+  1015→                      />
+  1016→                    </label>
+  1017→                    {isUrl(draftAvatar) ? (
+  1018→                      <div className="flex items-center gap-2 text-xs text-white/60">
+  1019→                        <Avatar avatar={draftAvatar} name={draftName} size="sm" />
+  1020→                        <span>uploaded</span>
+  1021→                        <button
+  1022→                          type="button"
+  1023→                          onClick={() => setDraftAvatar('preset:0')}
+  1024→                          className="text-white/40 underline-offset-2 hover:text-white hover:underline"
+  1025→                        >
+  1026→                          remove
+  1027→                        </button>
+  1028→                      </div>
+  1029→                    ) : null}
+  1030→                  </div>
+  1031→                ) : null}
+  1032→              </div>
+  1033→
+  1034→              {/* actions */}
+  1035→              <div className="flex gap-2">
+  1036→                <button
+  1037→                  type="button"
+  1038→                  onClick={() => setEditing(false)}
+  1039→                  className="flex-1 rounded-xl glass-subtle px-4 py-2 text-sm font-medium text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+  1040→                >
+  1041→                  Cancel
+  1042→                </button>
+  1043→                <button
+  1044→                  type="button"
+  1045→                  onClick={saveProfile}
+  1046→                  className="flex-1 rounded-xl bg-gradient-to-br from-fuchsia-500/70 to-violet-600/70 px-4 py-2 text-sm font-semibold text-white transition-transform hover:scale-[1.02] active:scale-95"
+  1047→                >
+  1048→                  Save
+  1049→                </button>
+  1050→              </div>
+  1051→            </motion.div>
+  1052→          </motion.div>
+  1053→        ) : null}
+  1054→      </AnimatePresence>
+  1055→    </motion.div>
+  1056→  )
+  1057→}
+  1058→

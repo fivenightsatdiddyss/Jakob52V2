@@ -1,17 +1,11 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
-import { createPortal } from 'react-dom'
+import { useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Link2,
   ChevronDown,
-  X,
-  RefreshCw,
-  Maximize2,
-  Minimize2,
   ExternalLink,
-  Loader2,
   Calendar,
   Star,
   Copy,
@@ -130,22 +124,31 @@ export default function LinksPanel() {
 
 /** A single site card with its name + all mirror links. */
 function SiteCard({ site }: { site: LinkSite }) {
-  const [active, setActive] = useState<string | null>(null)
-  const [fullscreen, setFullscreen] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [iframeKey, setIframeKey] = useState(0)
   const [copied, setCopied] = useState<string | null>(null)
 
+  /**
+   * Open a link in a new about:blank window (cloaked). The new tab shows
+   * about:blank (no URL/title in history) with the site loaded in a
+   * fullscreen srcdoc iframe.
+   */
   const open = useCallback((url: string) => {
-    setActive(url)
-    setIframeKey((k) => k + 1)
-    setLoading(true)
-  }, [])
-
-  const close = useCallback(() => {
-    setActive(null)
-    setFullscreen(false)
-  }, [])
+    const loader = `<!DOCTYPE html><html><head><meta charset="utf-8"><title></title><style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#04020a}iframe{border:0;width:100vw;height:100vh;display:block}</style></head><body><iframe src="${url}" allow="autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; gamepad; popups" allowfullscreen></iframe></body></html>`
+    const srcdoc = loader.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    const outer = `<!DOCTYPE html><html><head><title></title><style>html,body{margin:0;padding:0;height:100%;background:#04020a}iframe{border:0;width:100vw;height:100vh;display:block}</style></head><body><iframe srcdoc="${srcdoc}" allow="autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; gamepad; popups" allowfullscreen></iframe></body></html>`
+    const win = window.open('about:blank', '_blank')
+    if (!win) {
+      toast.error('Popup blocked', { description: 'Allow popups to open links in a cloaked tab.' })
+      return
+    }
+    try {
+      win.document.open()
+      win.document.write(outer)
+      win.document.close()
+      toast.success('opened in cloaked tab', { description: site.name })
+    } catch {
+      win.location.href = url
+    }
+  }, [site.name])
 
   const copy = (url: string) => {
     navigator.clipboard?.writeText(url).then(() => {
@@ -154,18 +157,6 @@ function SiteCard({ site }: { site: LinkSite }) {
       setTimeout(() => setCopied(null), 1500)
     })
   }
-
-  useEffect(() => {
-    if (!active) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (fullscreen) setFullscreen(false)
-        else close()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [active, fullscreen, close])
 
   return (
     <>
@@ -215,7 +206,7 @@ function SiteCard({ site }: { site: LinkSite }) {
               <button
                 onClick={() => open(url)}
                 className="glass-sheen inline-flex shrink-0 items-center gap-1 rounded-lg bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 px-2.5 py-1.5 text-[11px] font-medium text-white transition-transform hover:scale-105 active:scale-95"
-                title="open in viewer"
+                title="open in cloaked tab"
               >
                 <ExternalLink className="h-3 w-3" />
                 open
@@ -224,105 +215,6 @@ function SiteCard({ site }: { site: LinkSite }) {
           ))}
         </div>
       </div>
-
-      {/* Viewer modal — portaled to document.body */}
-      {typeof document !== 'undefined' && createPortal(
-      <AnimatePresence>
-        {active && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.25 }}
-            className={cn(
-              'fixed inset-0 z-[100] flex flex-col bg-[#04020a]/95 backdrop-blur-md',
-              fullscreen ? 'p-0' : 'p-3 sm:p-6'
-            )}
-          >
-            <div
-              className={cn(
-                'mb-2 flex items-center gap-2 rounded-2xl glass-strong glass-sheen p-2',
-                fullscreen && 'mx-2 mt-2'
-              )}
-            >
-              <div
-                className={cn(
-                  'grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br text-sm font-black text-white',
-                  site.gradient
-                )}
-              >
-                {site.name[0]}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold text-white">{site.name}</div>
-                <div className="truncate text-[10px] text-white/40">
-                  {active.replace(/^https?:\/\//, '')}
-                </div>
-              </div>
-              <a
-                href={active}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hidden items-center gap-1.5 rounded-xl bg-white/8 px-3 py-2 text-xs font-medium text-white/80 transition-colors hover:bg-white/15 sm:inline-flex"
-                title="open in new tab"
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                new tab
-              </a>
-              <button
-                onClick={() => {
-                  setIframeKey((k) => k + 1)
-                  setLoading(true)
-                }}
-                className="grid h-9 w-9 place-items-center rounded-xl text-white/60 transition-colors hover:bg-white/10 hover:text-white"
-                title="reload"
-              >
-                <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-              </button>
-              <button
-                onClick={() => setFullscreen((v) => !v)}
-                className="grid h-9 w-9 place-items-center rounded-xl text-white/60 transition-colors hover:bg-white/10 hover:text-white"
-                title="fullscreen"
-              >
-                {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-              </button>
-              <button
-                onClick={close}
-                className="grid h-9 w-9 place-items-center rounded-xl bg-white/8 text-white/70 transition-colors hover:bg-rose-500/30 hover:text-white"
-                title="close (Esc)"
-              >
-                <X className="h-4.5 w-4.5" />
-              </button>
-            </div>
-
-            <div
-              className={cn(
-                'relative flex-1 overflow-hidden rounded-2xl glass glass-sheen',
-                fullscreen && 'rounded-none'
-              )}
-            >
-              {loading && (
-                <div className="absolute inset-0 z-10 grid place-items-center bg-[#04020a]">
-                  <div className="text-center">
-                    <Loader2 className="mx-auto mb-3 h-9 w-9 animate-spin text-fuchsia-300" />
-                    <p className="text-sm text-white/60">loading {site.name}…</p>
-                  </div>
-                </div>
-              )}
-              <iframe
-                key={iframeKey}
-                src={`/api/proxy?url=${encodeURIComponent(active)}`}
-                onLoad={() => setLoading(false)}
-                className="h-full w-full border-0 bg-white"
-                sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin"
-                referrerPolicy="no-referrer"
-                title={site.name}
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      , document.body)}
     </>
   )
 }

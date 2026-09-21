@@ -16,9 +16,11 @@ import {
   Image as ImageIcon,
   Check,
   Users,
+  Video,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import FacetimeRoom from './facetime-room'
 
 type ChatMsg = {
   id: string
@@ -54,13 +56,12 @@ type PollResponse = {
   typing?: TypingEntry[]
 }
 
-// Decorative channel list — only `general` is the live, shared relay channel.
+// Channel list — general + random are live text channels; facetime is the
+// public video room (renders the FacetimeRoom component instead of text).
 const CHANNELS = [
-  { id: 'general', name: 'general', topic: 'the live relay — open to all drifters', live: true },
-  { id: 'singularity', name: 'singularity', topic: 'black hole talk (coming soon)', live: false },
-  { id: 'glass-design', name: 'glass-design', topic: 'liquid ui craft (coming soon)', live: false },
-  { id: 'arcade', name: 'arcade', topic: 'high scores & runs (coming soon)', live: false },
-  { id: 'proxy-lab', name: 'proxy-lab', topic: 'routing experiments (coming soon)', live: false },
+  { id: 'general', name: 'general', topic: 'the live relay — open to all drifters', live: true, kind: 'text' as const },
+  { id: 'random', name: 'random', topic: 'off-topic chaos', live: true, kind: 'text' as const },
+  { id: 'facetime', name: 'facetime', topic: 'public video room — camera + mic', live: true, kind: 'video' as const },
 ]
 
 const QUICK = ['nice', 'lol', '+1', 'on it', '✦']
@@ -286,6 +287,13 @@ export default function ChatPanel() {
   const [avatarMode, setAvatarMode] = useState<'preset' | 'emoji' | 'upload'>('preset')
   const [uploading, setUploading] = useState(false)
 
+  // active channel — general + random are text; facetime is the video room
+  const [activeChannel, setActiveChannel] = useState<string>('general')
+  const activeChannelRef = useRef<string>('general')
+  useEffect(() => {
+    activeChannelRef.current = activeChannel
+  }, [activeChannel])
+
   const scrollRef = useRef<HTMLDivElement>(null)
   const sessionIdRef = useRef<string>('')
   const lastMessageTimeRef = useRef<string>('')
@@ -383,7 +391,7 @@ export default function ChatPanel() {
       const p = profileRef.current
       const since = lastMessageTimeRef.current
       try {
-        const url = `/api/chat?since=${encodeURIComponent(since)}`
+        const url = `/api/chat?since=${encodeURIComponent(since)}&channel=${encodeURIComponent(activeChannelRef.current)}`
         const res = await fetch(url, { cache: 'no-store' })
         if (!res.ok) throw new Error(`http ${res.status}`)
         const data = (await res.json()) as PollResponse
@@ -567,6 +575,7 @@ export default function ChatPanel() {
       text: value,
       color: p.color,
       avatar: p.avatar,
+      channel: activeChannelRef.current,
     })
     // clear typing indicator
     if (typingClearRef.current) clearTimeout(typingClearRef.current)
@@ -620,19 +629,35 @@ export default function ChatPanel() {
           <span className="text-sm font-semibold text-white">Channels</span>
         </div>
         <div className="flex-1 overflow-y-auto p-2 glass-scroll">
-          {CHANNELS.map((r) => (
+          {CHANNELS.map((r) => {
+            const isActive = activeChannel === r.id
+            return (
             <button
               key={r.id}
               disabled={!r.live}
-              title={r.live ? 'Live channel' : 'Coming soon'}
+              onClick={() => {
+                if (!r.live || isActive) return
+                setActiveChannel(r.id)
+                // reset per-channel state so the new channel loads fresh
+                setMessages([])
+                lastMessageTimeRef.current = ''
+                setTypingUser(null)
+              }}
+              title={r.live ? r.topic : 'Coming soon'}
               className={cn(
                 'group mb-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors',
-                r.live
-                  ? 'bg-white/12 text-white'
-                  : 'cursor-not-allowed text-white/35 hover:bg-transparent',
+                isActive
+                  ? 'bg-gradient-to-br from-fuchsia-500/25 to-violet-500/15 text-white ring-1 ring-inset ring-fuchsia-400/30'
+                  : r.live
+                    ? 'text-white/60 hover:bg-white/8 hover:text-white'
+                    : 'cursor-not-allowed text-white/35 hover:bg-transparent',
               )}
             >
-              <Hash className="h-4 w-4 shrink-0 text-white/40" />
+              {r.kind === 'video' ? (
+                <Video className="h-4 w-4 shrink-0 text-fuchsia-300" />
+              ) : (
+                <Hash className="h-4 w-4 shrink-0 text-white/40" />
+              )}
               <span className="flex-1 truncate">{r.name}</span>
               {r.live ? (
                 <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-emerald-300">
@@ -641,7 +666,8 @@ export default function ChatPanel() {
                 </span>
               ) : null}
             </button>
-          ))}
+            )
+          })}
 
           {/* Online roster */}
           <div className="mt-3 px-2">
@@ -709,19 +735,30 @@ export default function ChatPanel() {
         </div>
       </aside>
 
-      {/* Conversation */}
+      {/* Conversation (text channels) OR FacetimeRoom (video channel) */}
       <div className="flex min-w-0 flex-1 flex-col">
+        {activeChannel === 'facetime' ? (
+          <FacetimeRoom
+            profile={profile}
+            sessionId={sessionIdRef.current}
+          />
+        ) : (
+        <>
         <header className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
-          <Hash className="h-5 w-5 text-white/40" />
+          {activeChannel === 'facetime' ? (
+            <Video className="h-5 w-5 text-fuchsia-300" />
+          ) : (
+            <Hash className="h-5 w-5 text-white/40" />
+          )}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-white">general</span>
+              <span className="text-sm font-semibold text-white">{activeChannel}</span>
               <span className="inline-flex items-center gap-1 text-[10px] text-emerald-300">
                 <Circle className="h-2 w-2 fill-emerald-400 text-emerald-400" /> live relay
               </span>
             </div>
             <p className="truncate text-xs text-white/45">
-              {connected ? 'the live relay — open to all drifters' : 'connecting to relay…'}
+              {connected ? CHANNELS.find((c) => c.id === activeChannel)?.topic || 'live channel' : 'connecting to relay…'}
             </p>
           </div>
           {/* mobile: show edit profile since the sidebar is hidden */}
@@ -821,7 +858,7 @@ export default function ChatPanel() {
             onChange={onInputChange}
             maxLength={500}
             disabled={!connected}
-            placeholder={connected ? 'Message #general' : 'waiting for relay…'}
+            placeholder={connected ? `Message #${activeChannel}` : 'waiting for relay…'}
             className="glass-subtle flex-1 rounded-xl border border-white/10 bg-transparent px-4 py-2.5 text-sm text-white placeholder:text-white/35 focus:border-fuchsia-400/40 focus:outline-none disabled:opacity-50"
           />
           <button
@@ -832,6 +869,8 @@ export default function ChatPanel() {
             <Send className="h-4.5 w-4.5" />
           </button>
         </form>
+        </>
+        )}
       </div>
 
       {/* Profile editor modal */}

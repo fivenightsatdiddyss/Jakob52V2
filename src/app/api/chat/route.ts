@@ -140,13 +140,14 @@ const rosterToArray = (roster: Record<string, RosterEntry>) =>
 
 const noStore = { 'cache-control': 'no-store' } as const
 
-// ---- GET: poll for new messages + presence ----
+// ---- GET: poll for new messages + presence (per-channel) ----
 export async function GET(req: NextRequest) {
   const since = req.nextUrl.searchParams.get('since') || ''
+  const channel = (req.nextUrl.searchParams.get('channel') || 'general').replace(/[^a-z0-9-]/gi, '').slice(0, 24) || 'general'
   const now = Date.now()
 
   const [messages, roster, typing] = await Promise.all([
-    readJSON<ChatMsg[]>('messages', []),
+    readJSON<ChatMsg[]>(`messages:${channel}`, []),
     readJSON<Record<string, RosterEntry>>('roster', {}),
     readJSON<Record<string, TypingEntry>>('typing', {}),
   ])
@@ -225,11 +226,13 @@ export async function POST(req: NextRequest) {
       text?: unknown
       color?: unknown
       avatar?: unknown
+      channel?: unknown
     }
     const text = trim(b.text, MAX_TEXT)
     const user = trim(b.user, MAX_USER) || 'anon'
     const color = trim(b.color, MAX_COLOR)
     const avatar = trim(b.avatar, MAX_AVATAR)
+    const channel = (typeof b.channel === 'string' ? b.channel : 'general').replace(/[^a-z0-9-]/gi, '').slice(0, 24) || 'general'
     if (!text) {
       return NextResponse.json(
         { ok: false, error: 'empty text' },
@@ -244,10 +247,10 @@ export async function POST(req: NextRequest) {
       avatar,
       time: new Date(now).toISOString(),
     }
-    const messages = await readJSON<ChatMsg[]>('messages', [])
+    const messages = await readJSON<ChatMsg[]>(`messages:${channel}`, [])
     const safeMessages = Array.isArray(messages) ? messages : []
     const next = [...safeMessages, msg].slice(-MAX_HISTORY)
-    await writeJSON('messages', next)
+    await writeJSON(`messages:${channel}`, next)
     return NextResponse.json(
       { ok: true, message: msg },
       { headers: noStore },
