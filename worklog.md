@@ -245,3 +245,72 @@ Stage Summary:
 - Files changed: src/app/layout.tsx (Blaka_Hollow next/font + disguise/panic mounts already by subagent), src/app/globals.css (.font-blaka + .text-shiny utilities, removed broken @import), src/components/jakob/main-view.tsx (HUD home-only + outside motion.div, mobile nav outside motion.div, AppShortcuts on home, font-blaka text-shiny title), src/components/jakob/app-shortcuts.tsx (NEW), src/components/jakob/panels/movies-data.ts (121 posters), src/components/jakob/panels/movies-panel.tsx (poster <img> + fallback).
 - Tab disguise + panic key (Task 5) done by subagent — see that section.
 - `bun run lint` passes (0 errors). All browser-verified through the gateway on :81.
+
+
+---
+
+Task ID: 3
+Agent: full-stack-developer (chat → netlify serverless)
+Task: Replace socket.io chat with Netlify serverless + Blobs polling
+
+Work Log:
+- Read worklog + existing `chat-panel.tsx` (930 lines, socket.io-based) + `mini-services/chat-service/index.ts` + `@netlify/blobs` type defs to plan the migration.
+- Confirmed `@netlify/blobs` v11.1.0 exports `getDeployStore` (NOT `getEnvBlobStore` as the task brief suggested — that name doesn't exist in v11). `getDeployStore('chat')` returns a deploy-scoped `Store` that auto-detects the Netlify Blobs context from `globalThis.netlifyBlobsContext` (set by the Netlify runtime). Used `getDeployStore` as the equivalent.
+- Ran `cd /home/z/my-project && bun add @netlify/blobs` (installed v11.1.0) and `cd /home/z/my-project && bun remove socket.io-client` (removed v4.8.3 — main project no longer needs it; the `mini-services/chat-service` keeps its own copy in its own package.json).
+- Created `src/app/api/chat/route.ts`:
+  - `export const runtime = 'nodejs'` + `export const dynamic = 'force-dynamic'`.
+  - Module-load detection: `let blobs; try { blobs = getDeployStore('chat') } catch { blobs = null }` then `const useBlobs = blobs !== null && !!process.env.NETLIFY`. On Netlify (`process.env.NETLIFY` set + Blobs context available) → use Blobs. In local `next dev` (no NETLIFY env) → use a module-level `Map<string,string>` so two browser tabs hitting the same dev process share state.
+  - `readJSON<T>(key, fallback)` / `writeJSON<T>(key, value)` abstract over both backends. Blobs path uses `store.get(key, { type: 'json' })` + `store.setJSON(key, value)`; in-memory path uses `Map.get`+`JSON.parse` / `JSON.stringify`+`Map.set`. All calls wrapped in try/catch — a Blobs hiccup returns the fallback rather than throwing.
+  - Three stored keys: `messages` (array, capped at last 50), `roster` (object keyed by sessionId → `{user, color, avatar, lastSeen}`), `typing` (object keyed by sessionId → `{user, typingUntil}`).
+  - `GET /api/chat?since=<iso>`: reads all three keys in parallel, prunes roster entries older than 15s and typing entries past their 2.5s TTL, best-effort writes the pruned versions back, returns `{ messages: [...filtered by time > since], online: <active roster count>, roster: [array of {id,user,color,avatar}], typing: [array of {sessionId,user}] }`. `since` filtering uses strict `>` on parsed `Date` (so a re-poll with the last message's exact time doesn't re-return it). All responses carry `cache-control: no-store`.
+  - `POST /api/chat` with `op: 'message'` — validates/trims (`text` ≤500, `user` ≤24, `color` ≤40, `avatar` ≤400, falls back to `'anon'` for missing user), generates `{id, time: new Date().toISOString()}`, appends to messages (capped at 50), returns `{ok:true, message}`.
+  - `POST /api/chat` with `op: 'presence'` — requires `sessionId` (≤64 chars), upserts roster[sessionId] with `lastSeen = Date.now()`, prunes, returns `{ok:true, online, roster}`.
+  - `POST /api/chat` with `op: 'typing'` — requires `sessionId`; if `typing===true`, sets `typing[sessionId] = {user, typingUntil: now+2500}`; else deletes the entry. Prunes, returns `{ok:true}`.
+  - Unknown op / missing required fields / empty text → 400 with `{ok:false, error}`. Malformed JSON body → 400.
+- Rewrote `src/components/jakob/panels/chat-panel.tsx`:
+  - Removed `import { io, type Socket } from 'socket.io-client'` entirely. No more `XTransformPort` gateway logic.
+  - Preserved ALL profile features unchanged: `Profile`/`ChatMsg`/`RosterEntry` types, `CHANNELS`/`QUICK`/`COLORS`/`PRESET_GRADIENTS`/`EMOJIS` constants, `LS_KEY`/`AVATAR_MAX`/`randomGuest`/`pickColor`/`defaultProfile`/`formatTime`/`initialOf`/`isUrl`/`isEmoji`/`presetGradient` helpers, the entire `Avatar` component (preset/emoji/data-url/initial rendering at sm/md/lg sizes), the `downscaleToDataUrl` image-shrink helper, the profile editor modal (live preview, name input, color picker, 3-tab avatar picker with preset grid / emoji grid / upload-dropzone), localStorage persistence under `jakob52-chat-profile`, the roster sidebar, the channels sidebar (general is the only live channel), quick reactions, auto-scroll, typing indicator dots, liquid-glass aesthetic.
+  - Added polling constants: `POLL_INTERVAL_MS=1500`, `PRESENCE_KEEPALIVE_MS=10000`, `TYPING_THROTTLE_MS=1000`, `TYPING_CLIENT_TIMEOUT_MS=3500`, `CONNECT_STALE_MS=5000`, `OPTIMISTIC_PREFIX='local-'`, `SESSION_KEY='jakob52-chat-session'`.
+  - Refs: `sessionIdRef`, `lastMessageTimeRef`, `lastPollSuccessRef`, `lastPresenceRef`, `typingThrottleRef`, `typingClearRef`, `pollTimerRef`, `mountedRef`, `profileRef` (existing).
+  - Mount effect (one-shot, `[]` deps): loads profile from localStorage (or generates a guest), generates a stable `sessionId` (stored in `sessionStorage` so refresh keeps the same session), sends an initial `presence` POST, then starts a `setInterval` polling loop at 1500ms. The `poll()` callback does `fetch('/api/chat?since=<encoded lastMessageTime>')`, on success updates `connected=true`, merges new messages (dedupe by id; replace optimistic `local-` prefixed messages when the server's copy arrives within a 5s window), updates `online`/`roster`/`typingUser` (filters out my own sessionId), and piggybacks a `presence` keepalive POST every >10s. On failure, sets `connected=false` only if the last successful poll was >5s ago (so brief network blips don't flicker the pill). Cleanup: clears the interval, clears the typing timeout, fires a best-effort `typing:false` POST with `keepalive:true` so others don't see us typing after unmount.
+  - Profile-change effect (`[profile, profileLoaded]` deps): re-POSTs `presence` with the new name/color/avatar so the roster updates live across all tabs.
+  - `send()`: optimistic-appends a `local-` prefixed message with the current time, POSTs `{op:'message',...}` (fire-and-forget), POSTs `{op:'typing',typing:false}` to clear the indicator, clears input. The next poll reconciles the optimistic message with the server's version (matched by user+text+5s-time-window, replaced in place).
+  - `onInputChange()`: throttled — POSTs `{op:'typing',typing:true}` at most once per 1000ms while typing.
+  - `postChat()` helper: fire-and-forget `fetch('/api/chat', {method:'POST', keepalive:true, ...})` with `.catch(()=>{})`.
+  - `presencePill`: green "● N online" when `connected`, amber "reconnecting…" otherwise — same UI as before, just driven by poll success recency instead of socket connect state.
+  - Lint: first pass had 6 "Unused eslint-disable directive" warnings — the `react-hooks/set-state-in-effect` rule only fires on the FIRST synchronous setState in an effect body (and apparently not at all when preceded by control flow / inside async callbacks), so my disable directives on `setProfile`/`setProfileLoaded`/`setConnected` (inside async poll callback) and the `exhaustive-deps` directives were redundant. Removed all 6. Final `bun run lint`: **0 errors, 0 warnings**.
+- Verified the API end-to-end with curl: GET (empty since) → `{messages:[],online:0,roster:[],typing:[]}`; POST presence for alice → `online:1`; POST presence for bob → `online:2` with both in roster; POST message → returns server-generated `{id,time}`; POST typing → `{ok:true}`; GET → returns the message + roster + typing entry; GET with `since` = exact message time → empty messages array (strict `>` works); GET with older `since` → includes the message; POST unknown op / empty text / missing sessionId → 400 with clear errors. Response times 4–7ms (well under the 100ms target). Page renders 200.
+- Confirmed `socket.io-client` is no longer in `package.json`, `@netlify/blobs@^11.1.0` is. The `mini-services/chat-service/` directory is left untouched (harmless, documented in README) — the main app no longer references it.
+
+Stage Summary:
+- Files created:
+  - `src/app/api/chat/route.ts` (NEW — Netlify serverless route, runtime=nodejs, force-dynamic, Netlify Blobs with in-memory fallback)
+- Files modified:
+  - `src/components/jakob/panels/chat-panel.tsx` (rewrote socket.io lifecycle as polling; preserved 100% of profile/avatar/roster/editor features)
+- Files NOT touched (per constraints): main-view, page, globals, black-hole-bg, hud-overlay, calculator-view, games, movies, proxy route, links, settings, ai-panel, custom-cursor, site-disguise, panic-key, layout, netlify.toml. The `mini-services/chat-service/` is left in place.
+- API operations supported:
+  - `GET /api/chat?since=<iso>` → `{messages, online, roster, typing}` (roster/typing pruned to last 15s/2.5s on every read)
+  - `POST /api/chat` `{op:'message', user, text, color, avatar}` → `{ok, message}` (validates text≤500, user≤24, color≤40, avatar≤400)
+  - `POST /api/chat` `{op:'presence', sessionId, user, color, avatar}` → `{ok, online, roster}` (upserts lastSeen=now)
+  - `POST /api/chat` `{op:'typing', sessionId, user, typing}` → `{ok}` (sets typingUntil=now+2500 or deletes)
+- Storage:
+  - **Netlify**: `getDeployStore('chat')` → deploy-scoped Netlify Blobs. Three keys: `messages` (JSON array, last 50), `roster` (JSON object sessionId→entry), `typing` (JSON object sessionId→entry). Cross-instance: every serverless function invocation reads/writes the same Blobs store, so two browser tabs hitting different function instances see the same data. Eventual consistency (default).
+  - **Local `next dev`**: `process.env.NETLIFY` is unset → falls back to a module-level `Map<string,string>` in the route module. Survives across requests within the same dev process, so two browser tabs hitting `localhost:3000` share state. Resets on dev server restart (acceptable for local dev).
+  - Detection: `useBlobs = blobs !== null && !!process.env.NETLIFY`. `getDeployStore()` is called once at module load inside a try/catch; if it throws (it doesn't in v11, but defensive), `blobs=null` and the in-memory path is used.
+- Polling interval: **1500ms** (1.5s). Presence keepalive piggybacked on the polling loop every >10s. Typing POST throttled to 1/s on the client; server TTL 2.5s. Connection pill flips to "reconnecting…" after 5s of no successful poll.
+- Caveats:
+  - `getEnvBlobStore` (mentioned in the task brief) doesn't exist in `@netlify/blobs` v11.1.0 — used `getDeployStore` instead, which is the documented equivalent for auto-detected deploy-scoped stores.
+  - Optimistic message dedupe uses (user, text, ±5s time window) to match the local `local-` prefixed message against the server's copy. If two users send identical text within 5s, the dedupe could mistakenly replace one — acceptable for a guest chat.
+  - Same-millisecond messages: server uses strict `>` on `since`, so two messages with identical ISO timestamps could in theory miss one. Negligible at 1.5s poll intervals.
+  - Netlify Blobs eventual consistency means a message posted by tab A might take one extra poll cycle (~1.5s) to appear for tab B if they hit different function instances. Acceptable.
+- Lint: `bun run lint` passes with **0 errors, 0 warnings**.
+- How to test:
+  1. Open the preview (right-side panel / "Open in New Tab"). Unlock the calculator gate with `3+2+3=8`. Click "Chat" in the sidebar.
+  2. The chat panel loads, sends an initial presence POST, and starts polling. The pill shows "● 1 online" within ~1.5s.
+  3. Open a second browser tab to the same URL, unlock, open Chat. Both tabs' pills should show "● 2 online" within ~1.5s, and both rosters (left sidebar) should list each other's guest name + preset avatar.
+  4. In tab 1, click the pencil → set name "alice", color fuchsia, preset 2 → Save. Tab 2's roster updates to show "alice" with the preset-2 gradient circle within ~1.5s.
+  5. In tab 2, set name "bob", emoji 🦊. Tab 1's roster updates to show "bob" with the 🦊 avatar.
+  6. Tab 1 types "hello" → tab 2 sees "alice is typing…" with bouncing dots within ~1.5s. Tab 1 sends → tab 2 sees the message (with alice's preset-2 avatar) within ~1.5s. Tab 1 sees its own message instantly (optimistic append).
+  7. Close tab 2 → tab 1's pill drops to "● 1 online" within ~15s (presence TTL) and bob disappears from the roster.
+  8. Upload an image as avatar in tab 1 → it's downscaled to ≤400 chars and appears on tab 2's roster + on every message tab 1 sends.
+  9. To verify Netlify deployment: push to the repo, Netlify builds, the `/api/chat` route deploys as a serverless function automatically (no extra config — `@netlify/plugin-nextjs` is already in devDependencies and `netlify.toml` is configured). On Netlify, `process.env.NETLIFY` is set so the Blobs path is used; presence/messages persist across function invocations and across users.

@@ -73,7 +73,7 @@ export default function ProxyPanel() {
       return next
     })
     toast.success('Routing through ' + region.name, {
-      description: 'tunneling via the corsproxy relay…',
+      description: 'tunneling via the in-app relay…',
     })
   }
 
@@ -134,7 +134,7 @@ export default function ProxyPanel() {
         </div>
         <div>
           <h2 className="text-2xl font-bold text-white">Proxy</h2>
-          <p className="text-sm text-white/45">route the web around the hole · corsproxy relay</p>
+          <p className="text-sm text-white/45">route the web around the hole · in-app relay</p>
         </div>
         <div className="ml-auto inline-flex items-center gap-2 rounded-full glass-subtle px-3 py-1.5 text-xs text-emerald-300">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.7)]" />
@@ -324,7 +324,7 @@ export default function ProxyPanel() {
 
       <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-xs text-white/30">
         <ExternalLink className="h-3 w-3" />
-        powered by corsproxy.io · some sites with strict CSP may not render fully
+        self-contained relay · some sites with strict CSP may not render fully
       </p>
     </motion.div>
   )
@@ -343,7 +343,7 @@ function ProxyHome({ onPick }: { onPick: (url: string) => void }) {
       </motion.div>
       <h3 className="text-xl font-semibold text-white">enter a destination above</h3>
       <p className="mt-2 max-w-md text-sm text-white/50">
-        type any url into the address bar and hit go. the relay rewrites and serves the page through corsproxy so it renders right here, cloaked behind the glass.
+        type any url into the address bar and hit go. the relay fetches and rewrites the page in-app so it renders right here, cloaked behind the glass.
       </p>
       <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
         {QUICK_LINKS.map((q) => (

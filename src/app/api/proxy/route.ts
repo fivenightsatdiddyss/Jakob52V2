@@ -3,17 +3,23 @@ import { NextRequest } from 'next/server'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// The corsproxy.io API key is read from the environment so it's never committed.
-// Set CORSPROXY_KEY in .env (see .env.example).
-const CORS_KEY = process.env.CORSPROXY_KEY || ''
-const CORS_BASE = 'https://corsproxy.io/'
+/**
+ * Self-contained web proxy.
+ *
+ * Fetches the target URL directly (server-side, no CORS issues), then:
+ *  - For HTML: strips frame-busting headers (X-Frame-Options, CSP), rewrites
+ *    resource URLs (img/script/css/link/srcset) and link hrefs to route back
+ *    through this function, rewrites CSS url() inside <style> and inline styles,
+ *    and injects a click/form interceptor so in-page navigation stays proxied.
+ *  - For CSS: rewrites url() references to route through this function.
+ *  - For other resources (images, scripts, fonts, etc.): passes the body
+ *    through with the original Content-Type.
+ *
+ * No 3rd-party service (corsproxy.io) is used — the function does all fetching.
+ * Works on Netlify serverless (each request is one invocation).
+ */
 
-/** Build a corsproxy.io URL that a browser can fetch directly (resources). */
-function corsUrl(u: string): string {
-  return `${CORS_BASE}?key=${CORS_KEY}&url=${encodeURIComponent(u)}`
-}
-
-/** Build a same-origin proxy URL so link navigations stay proxied. */
+/** Build a same-origin proxy URL so resources + link navigations stay proxied. */
 function proxyUrl(u: string): string {
   return `/api/proxy?url=${encodeURIComponent(u)}`
 }
@@ -21,7 +27,6 @@ function proxyUrl(u: string): string {
 /** Resolve a possibly-relative URL against the target page. */
 function resolve(href: string, base: URL): string | null {
   try {
-    // skip anchors, javascript:, mailto:, data:
     if (/^(#|javascript:|mailto:|tel:|data:|blob:)/i.test(href)) return null
     return new URL(href, base).href
   } catch {
@@ -30,60 +35,50 @@ function resolve(href: string, base: URL): string | null {
 }
 
 const RESOURCE_ATTRS = ['src', 'data-src', 'data-href', 'poster', 'data']
-const RESOURCE_TAGS_FOR_HREF = new Set(['link']) // link[href] for stylesheets/icons
+const RESOURCE_TAGS_FOR_HREF = new Set(['link'])
 
-/** Rewrite url(...) references inside CSS to route through corsproxy. */
+/** Rewrite url(...) references inside CSS to route through this proxy. */
 function rewriteCssUrls(css: string, base: URL): string {
   return css.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (m, q: string, raw: string) => {
     const abs = resolve(raw, base)
     if (!abs) return m
-    return `url(${q}${corsUrl(abs)}${q})`
+    return `url(${q}${proxyUrl(abs)}${q})`
   })
 }
 
-/**
- * Rewrite an HTML document so that:
- *  - resources load through corsproxy.io (cross-origin, CORS-enabled)
- *  - link clicks navigate back through /api/proxy (stay proxied)
- *  - CSS url(...) inside <style> and inline styles route through corsproxy
- */
+/** Rewrite an HTML document so resources + navigation route through /api/proxy. */
 function rewriteHtml(html: string, target: URL): string {
-  // 1. Drop existing <base> tags (we resolve everything ourselves)
+  // Drop existing <base> tags (we resolve everything ourselves)
   html = html.replace(/<base\b[^>]*>/gi, '')
 
-  // 2. Walk every tag and rewrite its attributes
+  // Walk every tag and rewrite its attributes
   html = html.replace(
     /<([a-zA-Z][\w-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g,
-    (full, tag: string, attrs: string) => {
+    (_full, tag: string, attrs: string) => {
       const tagLower = tag.toLowerCase()
       let nextAttrs = attrs
 
-      // href handling
+      // href: link tags → proxy (resource); anchor tags → proxy (navigation)
       nextAttrs = nextAttrs.replace(
         /(\bhref\s*=\s*)("|')([^"']*)\2/gi,
         (_m, eq: string, q: string, val: string) => {
           const abs = resolve(val, target)
           if (!abs) return `${eq}${q}${val}${q}`
-          if (RESOURCE_TAGS_FOR_HREF.has(tagLower)) {
-            // stylesheet / icon -> cors
-            return `${eq}${q}${corsUrl(abs)}${q}`
-          }
-          // anchor links -> stay proxied
           return `${eq}${q}${proxyUrl(abs)}${q}`
-        }
+        },
       )
 
-      // resource src-like attrs
+      // resource src-like attrs → proxy
       for (const attr of RESOURCE_ATTRS) {
         const re = new RegExp(`(\\b${attr}\\s*=\\s*)("|')([^"']*)\\2`, 'gi')
         nextAttrs = nextAttrs.replace(re, (_m, eq: string, q: string, val: string) => {
           const abs = resolve(val, target)
           if (!abs) return `${eq}${q}${val}${q}`
-          return `${eq}${q}${corsUrl(abs)}${q}`
+          return `${eq}${q}${proxyUrl(abs)}${q}`
         })
       }
 
-      // srcset (comma-separated candidates: "url 1x, url 2x")
+      // srcset → rewrite each candidate
       nextAttrs = nextAttrs.replace(
         /(\bsrcset\s*=\s*)("|')([^"']*)\2/gi,
         (_m, eq: string, q: string, val: string) => {
@@ -94,32 +89,33 @@ function rewriteHtml(html: string, target: URL): string {
               if (!trimmed) return trimmed
               const [url, ...desc] = trimmed.split(/\s+/)
               const abs = resolve(url, target)
-              return abs ? `${corsUrl(abs)}${desc.length ? ' ' + desc.join(' ') : ''}` : trimmed
+              return abs ? `${proxyUrl(abs)}${desc.length ? ' ' + desc.join(' ') : ''}` : trimmed
             })
             .join(', ')
           return `${eq}${q}${rewritten}${q}`
-        }
+        },
       )
 
-      // inline style="...url(...)..."
+      // inline style url(...) → proxy
       nextAttrs = nextAttrs.replace(
         /(\bstyle\s*=\s*)("|')([^"']*)\2/gi,
         (_m, eq: string, q: string, val: string) => {
           return `${eq}${q}${rewriteCssUrls(val, target)}${q}`
-        }
+        },
       )
 
+      // CSS <style> blocks
+      void tagLower
       return `<${tag}${nextAttrs}>`
-    }
+    },
   )
 
-  // 3. CSS url() inside <style> blocks
+  // CSS url() inside <style> blocks
   html = html.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (_m, open, body, close) => {
     return `${open}${rewriteCssUrls(body as string, target)}${close}`
   })
 
-  // 4. Inject a tiny script that intercepts dynamic <a> clicks & form submits,
-  //    re-routing them through the proxy so in-page navigation stays cloaked.
+  // Inject a click/form interceptor so dynamic navigation stays proxied
   const interceptor = `<script>(function(){
     var T=${JSON.stringify(target.href)};
     function abs(u){try{return new URL(u,new URL(T)).href}catch(e){return null}}
@@ -148,16 +144,19 @@ function rewriteHtml(html: string, target: URL): string {
   return html
 }
 
-/** Fetch a URL through corsproxy.io using browser-like headers (free tier requirement). */
-async function fetchViaCors(targetUrl: string): Promise<{ status: number; body: string; contentType: string }> {
-  const proxied = corsUrl(targetUrl)
-  const res = await fetch(proxied, {
+/** Fetch a URL directly (server-side). Returns text + metadata. */
+async function fetchDirect(targetUrl: string): Promise<{
+  status: number
+  body: string
+  contentType: string
+  finalUrl: string
+}> {
+  const res = await fetch(targetUrl, {
     headers: {
-      Origin: 'http://localhost:3000',
-      Referer: 'http://localhost:3000/',
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
     },
     redirect: 'follow',
     cache: 'no-store',
@@ -165,7 +164,8 @@ async function fetchViaCors(targetUrl: string): Promise<{ status: number; body: 
 
   const body = await res.text()
   const contentType = res.headers.get('content-type') || 'text/html; charset=utf-8'
-  return { status: res.status, body, contentType }
+  // res.url is the final URL after redirects — use it as the base for relative resolution
+  return { status: res.status, body, contentType, finalUrl: res.url || targetUrl }
 }
 
 function errorPage(title: string, msg: string) {
@@ -176,7 +176,7 @@ function errorPage(title: string, msg: string) {
         <p style="color:#c4b5fd;margin:0;word-break:break-word">${msg}</p>
       </div>
     </body></html>`,
-    { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+    { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
   )
 }
 
@@ -198,30 +198,49 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const { status, body, contentType } = await fetchViaCors(target.href)
+    const { status, body, contentType, finalUrl } = await fetchDirect(target.href)
 
     if (status >= 400) {
       return errorPage('relay error', `upstream returned ${status} for ${target.href}`)
     }
 
+    // Use the final URL (after redirects) as the base for relative resolution
+    const base = new URL(finalUrl)
     const isHtml = /text\/html|application\/xhtml/i.test(contentType)
-    if (!isHtml) {
-      // non-HTML resource routed here by a link — pass it through
-      return new Response(body, {
+    const isCss = /text\/css/i.test(contentType)
+
+    if (isHtml) {
+      const rewritten = rewriteHtml(body, base)
+      return new Response(rewritten, {
         status: 200,
         headers: {
-          'Content-Type': contentType,
-          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'text/html; charset=utf-8',
+          // Allow framing by our own app (strip any upstream X-Frame-Options/CSP)
+          'X-Frame-Options': 'SAMEORIGIN',
+          'Content-Security-Policy': '',
+          'Cache-Control': 'no-store',
         },
       })
     }
 
-    const rewritten = rewriteHtml(body, target)
-    return new Response(rewritten, {
+    if (isCss) {
+      const rewritten = rewriteCssUrls(body, base)
+      return new Response(rewritten, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/css; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-store',
+        },
+      })
+    }
+
+    // Non-HTML/CSS resource (image, script, font, etc.) — pass through as-is
+    return new Response(body, {
       status: 200,
       headers: {
-        'Content-Type': 'text/html; charset=utf-8',
-        'X-Frame-Options': 'SAMEORIGIN',
+        'Content-Type': contentType,
+        'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'no-store',
       },
     })

@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { io, type Socket } from 'socket.io-client'
 import {
   MessagesSquare,
   Send,
@@ -43,8 +42,17 @@ type RosterEntry = {
   avatar: string
 }
 
-type PresencePayload = { online: number }
-type TypingPayload = { user: string; typing: boolean }
+type TypingEntry = {
+  sessionId: string
+  user: string
+}
+
+type PollResponse = {
+  messages?: ChatMsg[]
+  online?: number
+  roster?: RosterEntry[]
+  typing?: TypingEntry[]
+}
 
 // Decorative channel list — only `general` is the live, shared relay channel.
 const CHANNELS = [
@@ -88,7 +96,14 @@ const EMOJIS = [
 ]
 
 const LS_KEY = 'jakob52-chat-profile'
+const SESSION_KEY = 'jakob52-chat-session'
 const AVATAR_MAX = 400
+const POLL_INTERVAL_MS = 1500
+const PRESENCE_KEEPALIVE_MS = 10_000
+const TYPING_THROTTLE_MS = 1000
+const TYPING_CLIENT_TIMEOUT_MS = 3500
+const CONNECT_STALE_MS = 5000
+const OPTIMISTIC_PREFIX = 'local-'
 
 const randomGuest = () => {
   const n = Math.floor(1000 + Math.random() * 9000)
@@ -249,13 +264,13 @@ export default function ChatPanel() {
   // profile — starts as a default; loaded from localStorage (or generated) on mount
   const [profile, setProfile] = useState<Profile>(defaultProfile)
   const [profileLoaded, setProfileLoaded] = useState(false)
-  // keep a ref so socket connect handler always sees the latest profile
+  // keep a ref so polling/keepalive callbacks always see the latest profile
   const profileRef = useRef<Profile>(profile)
   useEffect(() => {
     profileRef.current = profile
   }, [profile])
 
-  // socket subscription state — set from external socket callbacks, not synchronously in effect body
+  // chat state — updated from poll responses (external subscription)
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [online, setOnline] = useState(0)
   const [connected, setConnected] = useState(false)
@@ -272,12 +287,47 @@ export default function ChatPanel() {
   const [uploading, setUploading] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
-  const socketRef = useRef<Socket | null>(null)
+  const sessionIdRef = useRef<string>('')
+  const lastMessageTimeRef = useRef<string>('')
+  const lastPollSuccessRef = useRef<number>(0)
+  const lastPresenceRef = useRef<number>(0)
+  const typingThrottleRef = useRef<number>(0)
   const typingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const mountedRef = useRef<boolean>(true)
 
-  // ---- load profile from localStorage on mount ----
+  // ---- POST helper (best-effort, fire-and-forget) ----
+  const postChat = (body: Record<string, unknown>) => {
+    if (!mountedRef.current) return
+    void fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      keepalive: true,
+    }).catch(() => {
+      /* swallow — polling will reconcile */
+    })
+  }
+
+  const sendPresence = (p: Profile) => {
+    const sid = sessionIdRef.current
+    if (!sid || !p.name) return
+    postChat({
+      op: 'presence',
+      sessionId: sid,
+      user: p.name,
+      color: p.color,
+      avatar: p.avatar,
+    })
+    lastPresenceRef.current = Date.now()
+  }
+
+  // ---- load profile + session on mount, start polling ----
   useEffect(() => {
     if (typeof window === 'undefined') return
+    mountedRef.current = true
+
+    // load profile from localStorage (or generate a fresh guest)
     let loaded: Profile | null = null
     try {
       const raw = window.localStorage.getItem(LS_KEY)
@@ -307,71 +357,134 @@ export default function ChatPanel() {
       loaded = { name: randomGuest(), color: pickColor(), avatar: 'preset:0' }
     }
     setProfile(loaded)
+    profileRef.current = loaded
     setProfileLoaded(true)
-  }, [])
 
-  // ---- socket lifecycle ----
-  useEffect(() => {
-    // CRITICAL: gateway requires path "/" + ?XTransformPort=3003 in the URI.
-    // Baking the query into the URI string (matching the websocket demo) ensures
-    // socket.io uses "/" as the engine.io path so Caddy can route to port 3003.
-    // Never use a direct http://localhost:3003 URL — that bypasses the gateway.
-    const socket = io('/?XTransformPort=3003', {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-    })
-    socketRef.current = socket
+    // stable session id — persists across refresh within the same browser tab
+    let sid = ''
+    try {
+      sid = window.sessionStorage.getItem(SESSION_KEY) || ''
+      if (!sid) {
+        sid = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+        window.sessionStorage.setItem(SESSION_KEY, sid)
+      }
+    } catch {
+      sid = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+    }
+    sessionIdRef.current = sid
 
-    socket.on('connect', () => {
-      setConnected(true)
-      // announce our profile so the server roster knows who we are
+    // initial presence so the roster sees us immediately
+    sendPresence(loaded)
+
+    // ---- polling loop ----
+    const poll = async () => {
+      if (!mountedRef.current) return
+      const sid2 = sessionIdRef.current
       const p = profileRef.current
-      if (p.name) {
-        socket.emit('profile', { user: p.name, color: p.color, avatar: p.avatar })
+      const since = lastMessageTimeRef.current
+      try {
+        const url = `/api/chat?since=${encodeURIComponent(since)}`
+        const res = await fetch(url, { cache: 'no-store' })
+        if (!res.ok) throw new Error(`http ${res.status}`)
+        const data = (await res.json()) as PollResponse
+        if (!mountedRef.current) return
+        lastPollSuccessRef.current = Date.now()
+        setConnected(true)
+
+        // merge messages — dedupe by id; replace optimistic local messages
+        const newMsgs = Array.isArray(data.messages) ? data.messages : []
+        if (newMsgs.length > 0) {
+          setMessages((prev) => {
+            const result = [...prev]
+            for (const server of newMsgs) {
+              if (result.some((m) => m.id === server.id)) continue
+              const serverT = new Date(server.time).getTime()
+              const localIdx = result.findIndex(
+                (m) =>
+                  m.id.startsWith(OPTIMISTIC_PREFIX) &&
+                  m.user === server.user &&
+                  m.text === server.text &&
+                  Math.abs(new Date(m.time).getTime() - serverT) < 5000,
+              )
+              if (localIdx >= 0) result[localIdx] = server
+              else result.push(server)
+            }
+            const latest = result[result.length - 1]
+            if (latest) {
+              const latestT = new Date(latest.time).getTime()
+              const curT = new Date(lastMessageTimeRef.current).getTime()
+              if (Number.isNaN(curT) || latestT > curT) {
+                lastMessageTimeRef.current = latest.time
+              }
+            }
+            return result.slice(-100)
+          })
+        }
+
+        if (typeof data.online === 'number') setOnline(data.online)
+        if (Array.isArray(data.roster)) setRoster(data.roster)
+
+        // typing indicator — only show someone else typing
+        const typingArr = Array.isArray(data.typing) ? data.typing : []
+        const other = typingArr.find((t) => t.sessionId !== sid2)
+        setTypingUser(other ? other.user : null)
+        if (other && typingClearRef.current == null) {
+          typingClearRef.current = setTimeout(() => {
+            setTypingUser(null)
+            typingClearRef.current = null
+          }, TYPING_CLIENT_TIMEOUT_MS)
+        } else if (!other && typingClearRef.current) {
+          clearTimeout(typingClearRef.current)
+          typingClearRef.current = null
+        }
+
+        // presence keepalive — piggyback on the polling loop
+        if (Date.now() - lastPresenceRef.current > PRESENCE_KEEPALIVE_MS) {
+          sendPresence(p)
+        }
+      } catch {
+        if (!mountedRef.current) return
+        const stale = Date.now() - lastPollSuccessRef.current > CONNECT_STALE_MS
+        setConnected(!stale)
       }
-    })
-    socket.on('disconnect', () => setConnected(false))
-    socket.on('presence', (p: PresencePayload) => setOnline(p.online))
-    socket.on('history', (hist: ChatMsg[]) =>
-      setMessages(Array.isArray(hist) ? hist : []),
-    )
-    socket.on('message', (msg: ChatMsg) =>
-      setMessages((prev) =>
-        prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
-      ),
-    )
-    socket.on('typing', (p: TypingPayload) => {
-      setTypingUser(p.typing ? p.user : null)
-      if (typingClearRef.current) clearTimeout(typingClearRef.current)
-      if (p.typing) {
-        typingClearRef.current = setTimeout(() => setTypingUser(null), 3000)
-      }
-    })
-    socket.on('roster', (r: RosterEntry[]) => {
-      setRoster(Array.isArray(r) ? r : [])
-    })
+    }
+    void poll()
+    pollTimerRef.current = setInterval(() => {
+      void poll()
+    }, POLL_INTERVAL_MS)
 
     return () => {
-      socket.disconnect()
-      socketRef.current = null
+      mountedRef.current = false
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
       if (typingClearRef.current) clearTimeout(typingClearRef.current)
+      typingClearRef.current = null
+      // best-effort: clear typing indicator so others don't see us typing forever
+      const sid2 = sessionIdRef.current
+      const p = profileRef.current
+      if (sid2 && p.name) {
+        void fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            op: 'typing',
+            sessionId: sid2,
+            user: p.name,
+            typing: false,
+          }),
+          keepalive: true,
+        }).catch(() => {
+          /* swallow */
+        })
+      }
     }
   }, [])
 
-  // re-broadcast our profile whenever it changes (so the roster stays live)
+  // re-broadcast presence whenever the profile changes (so the roster
+  // updates live with the new name/color/avatar)
   useEffect(() => {
     if (!profileLoaded) return
-    const sock = socketRef.current
-    if (!sock || !sock.connected) return
-    if (!profile.name) return
-    sock.emit('profile', {
-      user: profile.name,
-      color: profile.color,
-      avatar: profile.avatar,
-    })
+    sendPresence(profile)
   }, [profile, profileLoaded])
 
   // ---- auto-scroll on new message ----
@@ -397,15 +510,11 @@ export default function ChatPanel() {
     const avatar = draftAvatar || 'preset:0'
     const next: Profile = { name, color, avatar }
     setProfile(next)
+    profileRef.current = next
     try {
       window.localStorage.setItem(LS_KEY, JSON.stringify(next))
     } catch {
       /* ignore quota errors */
-    }
-    // emit immediately so the roster + future messages pick up the new identity
-    const sock = socketRef.current
-    if (sock && sock.connected) {
-      sock.emit('profile', { user: name, color, avatar })
     }
     setEditing(false)
     toast.success('Profile saved', {
@@ -440,26 +549,46 @@ export default function ChatPanel() {
   const send = () => {
     const value = input.trim().slice(0, 500)
     if (!value) return
-    const sock = socketRef.current
-    if (!sock || !sock.connected) return
-    sock.emit('message', {
-      user: profile.name,
+    const p = profileRef.current
+    if (!p.name) return
+    // optimistic append — the next poll will reconcile/replace with the server copy
+    const optimistic: ChatMsg = {
+      id: `${OPTIMISTIC_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      user: p.name,
       text: value,
-      color: profile.color,
-      avatar: profile.avatar,
+      color: p.color,
+      avatar: p.avatar,
+      time: new Date().toISOString(),
+    }
+    setMessages((prev) => [...prev, optimistic])
+    postChat({
+      op: 'message',
+      user: p.name,
+      text: value,
+      color: p.color,
+      avatar: p.avatar,
     })
+    // clear typing indicator
     if (typingClearRef.current) clearTimeout(typingClearRef.current)
+    typingClearRef.current = null
     setTypingUser(null)
-    sock.emit('typing', { user: profile.name, typing: false })
+    const sid = sessionIdRef.current
+    if (sid) {
+      postChat({ op: 'typing', sessionId: sid, user: p.name, typing: false })
+    }
     setInput('')
   }
 
   const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInput(e.target.value)
-    const sock = socketRef.current
-    if (sock && sock.connected && e.target.value.trim() && profile.name) {
-      sock.emit('typing', { user: profile.name, typing: true })
-    }
+    const p = profileRef.current
+    const sid = sessionIdRef.current
+    if (!sid || !p.name) return
+    if (!e.target.value.trim()) return
+    const now = Date.now()
+    if (now - typingThrottleRef.current < TYPING_THROTTLE_MS) return
+    typingThrottleRef.current = now
+    postChat({ op: 'typing', sessionId: sid, user: p.name, typing: true })
   }
 
   const presencePill = connected ? (
@@ -475,7 +604,6 @@ export default function ChatPanel() {
   )
 
   const myName = profile.name
-  const rosterOthers = roster
 
   return (
     <motion.div
@@ -519,11 +647,11 @@ export default function ChatPanel() {
           <div className="mt-3 px-2">
             <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[10px] font-bold uppercase tracking-wider text-white/40">
               <Users className="h-3 w-3" />
-              <span>online — {rosterOthers.length}</span>
+              <span>online — {roster.length}</span>
             </div>
             <div className="space-y-1">
               <AnimatePresence initial={false}>
-                {rosterOthers.map((p) => {
+                {roster.map((p) => {
                   const me = p.user === myName && myName !== ''
                   return (
                     <motion.div
@@ -552,7 +680,7 @@ export default function ChatPanel() {
                   )
                 })}
               </AnimatePresence>
-              {rosterOthers.length === 0 ? (
+              {roster.length === 0 ? (
                 <p className="px-2 py-1 text-[11px] text-white/30">no one online</p>
               ) : null}
             </div>
@@ -613,7 +741,7 @@ export default function ChatPanel() {
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-white/45">
               <Radio className="h-6 w-6 animate-pulse text-fuchsia-300" />
               <p className="text-sm">connecting to relay…</p>
-              <p className="text-[11px] text-white/30">establishing websocket handshake</p>
+              <p className="text-[11px] text-white/30">polling for messages</p>
             </div>
           ) : (
             <AnimatePresence initial={false}>

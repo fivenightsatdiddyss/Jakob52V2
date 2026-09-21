@@ -143,7 +143,7 @@ export default function AppShortcuts() {
               </div>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-semibold text-white">{active.name}</div>
-                <div className="truncate text-[10px] text-white/40">routed · corsproxy relay</div>
+                <div className="truncate text-[10px] text-white/40">routed · in-app relay</div>
               </div>
               <a
                 href={active.url}

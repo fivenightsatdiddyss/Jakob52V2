@@ -11,12 +11,12 @@ A liquid-glass "command deck" web app built with Next.js 16 — a calculator gat
 - **Liquid glass UI** — frosted-glass panels, sheened edges, smooth Framer Motion transitions throughout.
 - **Retractable sidebar** with categories:
   - **Settings** — about:blank cloak, liquid-glass intensity, tab disguise (favicon + title presets: Canvas, Classroom, Docs, etc.), and a panic key (redirect on a key press).
-  - **AI** — a glass chat deck.
+  - **AI** — a real language model (Llama 3.2 1B or Qwen 2.5 0.5B) running **in-browser** via WebLLM + WebGPU. No server, no API — the model downloads once and is cached.
   - **Games** — 559 games (pulled from an external library), each playable in a fullscreen iframe.
   - **Movies** — 121 movies streamed via Google Drive preview iframes, with real posters.
-  - **Chat** — real-time chat powered by a socket.io mini-service, with custom profiles + avatars and a live online count.
+  - **Chat** — real-time chat via a Netlify serverless function + Netlify Blobs (client polls every 1.5s), with custom profiles + avatars and a live online count.
   - **Links** — daily-rotating proxy service shortcuts.
-  - **Proxy** — a working in-page web proxy (HTML-rewriting relay via corsproxy.io).
+  - **Proxy** — a self-contained web proxy that fetches and rewrites pages directly (no 3rd-party service).
 - **Home** — a floating "jakob 52" title (Blaka Hollow font, shiny), a Texas Central Time clock + FPS counter, and app shortcuts (YouTube, TikTok, Discord, GeForce NOW, …) that open through the proxy.
 - **Custom cursor** — a purple ring with a square center on all pages.
 
@@ -48,7 +48,7 @@ cp .env.example .env
 | Variable | Description |
 |---|---|
 | `DATABASE_URL` | Prisma database URL (default `file:./dev.db`) |
-| `CORSPROXY_KEY` | Your corsproxy.io API key — required for the Proxy and Links features |
+| `CORSPROXY_KEY` | *(deprecated/unused)* — the proxy now fetches directly, no corsproxy needed |
 
 ### 3. Push the database schema
 
@@ -64,21 +64,15 @@ bun run dev
 
 The app runs on http://localhost:3000.
 
-### 5. (For chat) Start the socket.io mini-service
+### 5. (For chat) The chat runs as a Netlify serverless function
 
-The real-time chat runs on a separate bun project:
+The real-time chat uses `/api/chat` (a Next.js API route that deploys as a Netlify serverless function) with Netlify Blobs for storage. On Netlify it works automatically. For local dev, it falls back to an in-memory store (works across tabs in the same browser). No separate service needed.
 
-```bash
-cd mini-services/chat-service
-bun install
-bun run dev
-```
-
-This starts the chat service on port **3003**. The main app connects to it via `io('/?XTransformPort=3003')` — which expects a reverse-proxy gateway that forwards `?XTransformPort=<port>` to `localhost:<port>`. See `Caddyfile` for the gateway config.
+The old socket.io mini-service (`mini-services/chat-service/`) is still in the repo for reference but is **no longer used** — the chat panel now polls `/api/chat` instead.
 
 ## Gateway requirement
 
-This project expects a Caddy-style gateway that forwards requests with `?XTransformPort=<port>` to `localhost:<port>`, and otherwise to `localhost:3000`. The gateway config is in `Caddyfile`. The chat service (port 3003) is reached through this gateway. If you're not using the gateway, you'll need to adjust the socket connection in `src/components/jakob/panels/chat-panel.tsx`.
+The Caddy gateway (`Caddyfile`) is used in the sandbox dev environment to route `?XTransformPort=<port>` to different local services. On Netlify or other hosts, this isn't needed — the app works standalone. The chat no longer uses the gateway (it polls `/api/chat` directly).
 
 ## How the calculator gate works
 

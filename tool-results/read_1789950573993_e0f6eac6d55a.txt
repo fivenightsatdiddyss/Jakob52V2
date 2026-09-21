@@ -1,0 +1,930 @@
+     1→'use client'
+     2→
+     3→import { useEffect, useRef, useState } from 'react'
+     4→import { motion, AnimatePresence } from 'framer-motion'
+     5→import { io, type Socket } from 'socket.io-client'
+     6→import {
+     7→  MessagesSquare,
+     8→  Send,
+     9→  Hash,
+    10→  Circle,
+    11→  Radio,
+    12→  Pencil,
+    13→  X,
+    14→  Upload,
+    15→  Sparkles,
+    16→  Smile,
+    17→  Image as ImageIcon,
+    18→  Check,
+    19→  Users,
+    20→} from 'lucide-react'
+    21→import { toast } from 'sonner'
+    22→import { cn } from '@/lib/utils'
+    23→
+    24→type ChatMsg = {
+    25→  id: string
+    26→  user: string
+    27→  text: string
+    28→  color: string
+    29→  avatar: string
+    30→  time: string
+    31→}
+    32→
+    33→type Profile = {
+    34→  name: string
+    35→  color: string
+    36→  avatar: string
+    37→}
+    38→
+    39→type RosterEntry = {
+    40→  id: string
+    41→  user: string
+    42→  color: string
+    43→  avatar: string
+    44→}
+    45→
+    46→type PresencePayload = { online: number }
+    47→type TypingPayload = { user: string; typing: boolean }
+    48→
+    49→// Decorative channel list — only `general` is the live, shared relay channel.
+    50→const CHANNELS = [
+    51→  { id: 'general', name: 'general', topic: 'the live relay — open to all drifters', live: true },
+    52→  { id: 'singularity', name: 'singularity', topic: 'black hole talk (coming soon)', live: false },
+    53→  { id: 'glass-design', name: 'glass-design', topic: 'liquid ui craft (coming soon)', live: false },
+    54→  { id: 'arcade', name: 'arcade', topic: 'high scores & runs (coming soon)', live: false },
+    55→  { id: 'proxy-lab', name: 'proxy-lab', topic: 'routing experiments (coming soon)', live: false },
+    56→]
+    57→
+    58→const QUICK = ['nice', 'lol', '+1', 'on it', '✦']
+    59→
+    60→const COLORS = [
+    61→  'text-fuchsia-300',
+    62→  'text-sky-300',
+    63→  'text-amber-300',
+    64→  'text-emerald-300',
+    65→  'text-rose-300',
+    66→  'text-violet-300',
+    67→  'text-cyan-300',
+    68→  'text-orange-300',
+    69→]
+    70→
+    71→// 8 gradient presets — avatar stored as "preset:N"
+    72→const PRESET_GRADIENTS = [
+    73→  'from-fuchsia-500 to-violet-600',
+    74→  'from-rose-500 to-orange-500',
+    75→  'from-sky-500 to-cyan-400',
+    76→  'from-emerald-500 to-teal-500',
+    77→  'from-amber-500 to-yellow-500',
+    78→  'from-pink-500 to-rose-600',
+    79→  'from-cyan-500 to-blue-500',
+    80→  'from-violet-500 to-purple-600',
+    81→]
+    82→
+    83→const EMOJIS = [
+    84→  '👾', '🦊', '🐙', '🦄', '🐲', '🌟',
+    85→  '🌌', '🚀', '🔮', '🎇', '🪐', '🤖',
+    86→  '🎉', '🍕', '🎮', '🎧', '📚', '⚡',
+    87→  '🔥', '💧', '🌈', '🐱', '🦉', '🐳',
+    88→]
+    89→
+    90→const LS_KEY = 'jakob52-chat-profile'
+    91→const AVATAR_MAX = 400
+    92→
+    93→const randomGuest = () => {
+    94→  const n = Math.floor(1000 + Math.random() * 9000)
+    95→  return `guest-${n}`
+    96→}
+    97→
+    98→const pickColor = () => COLORS[Math.floor(Math.random() * COLORS.length)]
+    99→
+   100→const defaultProfile = (): Profile => ({
+   101→  name: '',
+   102→  color: pickColor(),
+   103→  avatar: 'preset:0',
+   104→})
+   105→
+   106→const formatTime = (iso: string) => {
+   107→  try {
+   108→    const d = new Date(iso)
+   109→    if (Number.isNaN(d.getTime())) return 'now'
+   110→    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+   111→  } catch {
+   112→    return 'now'
+   113→  }
+   114→}
+   115→
+   116→const initialOf = (name: string) =>
+   117→  (name || '?').trim().slice(0, 1).toUpperCase() || '?'
+   118→
+   119→// ---- avatar rendering helpers ----
+   120→const isUrl = (s: string) => s.startsWith('data:') || s.startsWith('http')
+   121→
+   122→const isEmoji = (s: string) => s.length > 0 && s.length <= 4 && !isUrl(s)
+   123→
+   124→const presetGradient = (avatar: string) => {
+   125→  const idx = Number.parseInt(avatar.slice('preset:'.length), 10)
+   126→  const safe = Number.isFinite(idx) ? idx : 0
+   127→  return PRESET_GRADIENTS[((safe % PRESET_GRADIENTS.length) + PRESET_GRADIENTS.length) % PRESET_GRADIENTS.length]
+   128→}
+   129→
+   130→// Renders an avatar circle based on the avatar encoding.
+   131→// size: 'sm' (28px sidebar/roster) | 'md' (36px messages) | 'lg' (48px editor preview)
+   132→function Avatar({
+   133→  avatar,
+   134→  name,
+   135→  size = 'md',
+   136→  className,
+   137→}: {
+   138→  avatar: string
+   139→  name: string
+   140→  size?: 'sm' | 'md' | 'lg'
+   141→  className?: string
+   142→}) {
+   143→  const dims =
+   144→    size === 'sm'
+   145→      ? 'h-7 w-7 text-xs'
+   146→      : size === 'lg'
+   147→        ? 'h-12 w-12 text-base'
+   148→        : 'h-9 w-9 text-sm'
+   149→  const initial = initialOf(name)
+   150→
+   151→  if (avatar.startsWith('preset:')) {
+   152→    return (
+   153→      <div
+   154→        className={cn(
+   155→          'grid shrink-0 place-items-center rounded-full bg-gradient-to-br font-bold text-white shadow-inner',
+   156→          dims,
+   157→          presetGradient(avatar),
+   158→          className,
+   159→        )}
+   160→      >
+   161→        {initial}
+   162→      </div>
+   163→    )
+   164→  }
+   165→
+   166→  if (isUrl(avatar)) {
+   167→    return (
+   168→      <img
+   169→        src={avatar}
+   170→        alt={name ? `${name} avatar` : 'avatar'}
+   171→        className={cn('shrink-0 rounded-full object-cover', dims, className)}
+   172→      />
+   173→    )
+   174→  }
+   175→
+   176→  if (isEmoji(avatar)) {
+   177→    return (
+   178→      <div
+   179→        className={cn(
+   180→          'grid shrink-0 place-items-center rounded-full bg-white/10 ring-1 ring-inset ring-white/15',
+   181→          dims,
+   182→          className,
+   183→        )}
+   184→      >
+   185→        <span className="leading-none">
+   186→          {size === 'lg' ? 'text-2xl' : size === 'sm' ? 'text-base' : 'text-lg'}
+   187→          {avatar}
+   188→        </span>
+   189→      </div>
+   190→    )
+   191→  }
+   192→
+   193→  // fallback → initial in a plain circle
+   194→  return (
+   195→    <div
+   196→      className={cn(
+   197→        'grid shrink-0 place-items-center rounded-full bg-white/10 font-bold text-white/80 ring-1 ring-inset ring-white/15',
+   198→        dims,
+   199→        className,
+   200→      )}
+   201→    >
+   202→      {initial}
+   203→    </div>
+   204→  )
+   205→}
+   206→
+   207→// Downscale an image file to a small data URL (≤ AVATAR_MAX chars).
+   208→// Tries progressively smaller sizes / lower qualities until it fits.
+   209→const downscaleToDataUrl = (file: File): Promise<string> =>
+   210→  new Promise((resolve, reject) => {
+   211→    if (!file.type.startsWith('image/')) {
+   212→      reject(new Error('not an image'))
+   213→      return
+   214→    }
+   215→    const reader = new FileReader()
+   216→    reader.onerror = () => reject(new Error('read failed'))
+   217→    reader.onload = () => {
+   218→      const img = new Image()
+   219→      img.onerror = () => reject(new Error('decode failed'))
+   220→      img.onload = () => {
+   221→        const minDim = Math.min(img.width, img.height) || 1
+   222→        const sx = (img.width - minDim) / 2
+   223→        const sy = (img.height - minDim) / 2
+   224→        const sizes = [64, 48, 40, 32, 28, 24]
+   225→        const qualities = [0.7, 0.5, 0.35, 0.25]
+   226→        for (const size of sizes) {
+   227→          for (const q of qualities) {
+   228→            const canvas = document.createElement('canvas')
+   229→            canvas.width = size
+   230→            canvas.height = size
+   231→            const ctx = canvas.getContext('2d')
+   232→            if (!ctx) continue
+   233→            ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size)
+   234→            const url = canvas.toDataURL('image/jpeg', q)
+   235→            if (url.length <= AVATAR_MAX) {
+   236→              resolve(url)
+   237→              return
+   238→            }
+   239→          }
+   240→        }
+   241→        reject(new Error('too large'))
+   242→      }
+   243→      img.src = reader.result as string
+   244→    }
+   245→    reader.readAsDataURL(file)
+   246→  })
+   247→
+   248→export default function ChatPanel() {
+   249→  // profile — starts as a default; loaded from localStorage (or generated) on mount
+   250→  const [profile, setProfile] = useState<Profile>(defaultProfile)
+   251→  const [profileLoaded, setProfileLoaded] = useState(false)
+   252→  // keep a ref so socket connect handler always sees the latest profile
+   253→  const profileRef = useRef<Profile>(profile)
+   254→  useEffect(() => {
+   255→    profileRef.current = profile
+   256→  }, [profile])
+   257→
+   258→  // socket subscription state — set from external socket callbacks, not synchronously in effect body
+   259→  const [messages, setMessages] = useState<ChatMsg[]>([])
+   260→  const [online, setOnline] = useState(0)
+   261→  const [connected, setConnected] = useState(false)
+   262→  const [input, setInput] = useState('')
+   263→  const [typingUser, setTypingUser] = useState<string | null>(null)
+   264→  const [roster, setRoster] = useState<RosterEntry[]>([])
+   265→
+   266→  // profile editor modal state
+   267→  const [editing, setEditing] = useState(false)
+   268→  const [draftName, setDraftName] = useState('')
+   269→  const [draftColor, setDraftColor] = useState('')
+   270→  const [draftAvatar, setDraftAvatar] = useState('')
+   271→  const [avatarMode, setAvatarMode] = useState<'preset' | 'emoji' | 'upload'>('preset')
+   272→  const [uploading, setUploading] = useState(false)
+   273→
+   274→  const scrollRef = useRef<HTMLDivElement>(null)
+   275→  const socketRef = useRef<Socket | null>(null)
+   276→  const typingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+   277→
+   278→  // ---- load profile from localStorage on mount ----
+   279→  useEffect(() => {
+   280→    if (typeof window === 'undefined') return
+   281→    let loaded: Profile | null = null
+   282→    try {
+   283→      const raw = window.localStorage.getItem(LS_KEY)
+   284→      if (raw) {
+   285→        const parsed = JSON.parse(raw) as Partial<Profile>
+   286→        if (parsed && typeof parsed === 'object') {
+   287→          loaded = {
+   288→            name:
+   289→              typeof parsed.name === 'string'
+   290→                ? parsed.name.slice(0, 24).trim() || randomGuest()
+   291→                : randomGuest(),
+   292→            color:
+   293→              typeof parsed.color === 'string' && parsed.color
+   294→                ? parsed.color.slice(0, 40)
+   295→                : pickColor(),
+   296→            avatar:
+   297→              typeof parsed.avatar === 'string' && parsed.avatar
+   298→                ? parsed.avatar.slice(0, AVATAR_MAX)
+   299→                : 'preset:0',
+   300→          }
+   301→        }
+   302→      }
+   303→    } catch {
+   304→      loaded = null
+   305→    }
+   306→    if (!loaded) {
+   307→      loaded = { name: randomGuest(), color: pickColor(), avatar: 'preset:0' }
+   308→    }
+   309→    setProfile(loaded)
+   310→    setProfileLoaded(true)
+   311→  }, [])
+   312→
+   313→  // ---- socket lifecycle ----
+   314→  useEffect(() => {
+   315→    // CRITICAL: gateway requires path "/" + ?XTransformPort=3003 in the URI.
+   316→    // Baking the query into the URI string (matching the websocket demo) ensures
+   317→    // socket.io uses "/" as the engine.io path so Caddy can route to port 3003.
+   318→    // Never use a direct http://localhost:3003 URL — that bypasses the gateway.
+   319→    const socket = io('/?XTransformPort=3003', {
+   320→      transports: ['websocket', 'polling'],
+   321→      reconnection: true,
+   322→      reconnectionAttempts: Infinity,
+   323→      reconnectionDelay: 1000,
+   324→      reconnectionDelayMax: 5000,
+   325→    })
+   326→    socketRef.current = socket
+   327→
+   328→    socket.on('connect', () => {
+   329→      setConnected(true)
+   330→      // announce our profile so the server roster knows who we are
+   331→      const p = profileRef.current
+   332→      if (p.name) {
+   333→        socket.emit('profile', { user: p.name, color: p.color, avatar: p.avatar })
+   334→      }
+   335→    })
+   336→    socket.on('disconnect', () => setConnected(false))
+   337→    socket.on('presence', (p: PresencePayload) => setOnline(p.online))
+   338→    socket.on('history', (hist: ChatMsg[]) =>
+   339→      setMessages(Array.isArray(hist) ? hist : []),
+   340→    )
+   341→    socket.on('message', (msg: ChatMsg) =>
+   342→      setMessages((prev) =>
+   343→        prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
+   344→      ),
+   345→    )
+   346→    socket.on('typing', (p: TypingPayload) => {
+   347→      setTypingUser(p.typing ? p.user : null)
+   348→      if (typingClearRef.current) clearTimeout(typingClearRef.current)
+   349→      if (p.typing) {
+   350→        typingClearRef.current = setTimeout(() => setTypingUser(null), 3000)
+   351→      }
+   352→    })
+   353→    socket.on('roster', (r: RosterEntry[]) => {
+   354→      setRoster(Array.isArray(r) ? r : [])
+   355→    })
+   356→
+   357→    return () => {
+   358→      socket.disconnect()
+   359→      socketRef.current = null
+   360→      if (typingClearRef.current) clearTimeout(typingClearRef.current)
+   361→    }
+   362→  }, [])
+   363→
+   364→  // re-broadcast our profile whenever it changes (so the roster stays live)
+   365→  useEffect(() => {
+   366→    if (!profileLoaded) return
+   367→    const sock = socketRef.current
+   368→    if (!sock || !sock.connected) return
+   369→    if (!profile.name) return
+   370→    sock.emit('profile', {
+   371→      user: profile.name,
+   372→      color: profile.color,
+   373→      avatar: profile.avatar,
+   374→    })
+   375→  }, [profile, profileLoaded])
+   376→
+   377→  // ---- auto-scroll on new message ----
+   378→  useEffect(() => {
+   379→    const el = scrollRef.current
+   380→    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+   381→  }, [messages.length])
+   382→
+   383→  // ---- profile editor helpers ----
+   384→  const openEditor = () => {
+   385→    setDraftName(profile.name)
+   386→    setDraftColor(profile.color)
+   387→    setDraftAvatar(profile.avatar)
+   388→    if (profile.avatar.startsWith('preset:')) setAvatarMode('preset')
+   389→    else if (isUrl(profile.avatar)) setAvatarMode('upload')
+   390→    else setAvatarMode('emoji')
+   391→    setEditing(true)
+   392→  }
+   393→
+   394→  const saveProfile = () => {
+   395→    const name = draftName.trim().slice(0, 24) || randomGuest()
+   396→    const color = draftColor || pickColor()
+   397→    const avatar = draftAvatar || 'preset:0'
+   398→    const next: Profile = { name, color, avatar }
+   399→    setProfile(next)
+   400→    try {
+   401→      window.localStorage.setItem(LS_KEY, JSON.stringify(next))
+   402→    } catch {
+   403→      /* ignore quota errors */
+   404→    }
+   405→    // emit immediately so the roster + future messages pick up the new identity
+   406→    const sock = socketRef.current
+   407→    if (sock && sock.connected) {
+   408→      sock.emit('profile', { user: name, color, avatar })
+   409→    }
+   410→    setEditing(false)
+   411→    toast.success('Profile saved', {
+   412→      description: `You are now ${name}`,
+   413→    })
+   414→  }
+   415→
+   416→  const handleUpload = async (file: File) => {
+   417→    setUploading(true)
+   418→    try {
+   419→      const url = await downscaleToDataUrl(file)
+   420→      setDraftAvatar(url)
+   421→      setAvatarMode('upload')
+   422→      toast.success('Avatar ready')
+   423→    } catch (err) {
+   424→      const msg = err instanceof Error ? err.message : 'failed'
+   425→      if (msg === 'too large') {
+   426→        toast.error("Couldn't shrink image enough", {
+   427→          description: 'Try a smaller or simpler image',
+   428→        })
+   429→      } else if (msg === 'not an image') {
+   430→        toast.error('Please choose an image file')
+   431→      } else {
+   432→        toast.error('Could not load image')
+   433→      }
+   434→    } finally {
+   435→      setUploading(false)
+   436→    }
+   437→  }
+   438→
+   439→  // ---- messaging ----
+   440→  const send = () => {
+   441→    const value = input.trim().slice(0, 500)
+   442→    if (!value) return
+   443→    const sock = socketRef.current
+   444→    if (!sock || !sock.connected) return
+   445→    sock.emit('message', {
+   446→      user: profile.name,
+   447→      text: value,
+   448→      color: profile.color,
+   449→      avatar: profile.avatar,
+   450→    })
+   451→    if (typingClearRef.current) clearTimeout(typingClearRef.current)
+   452→    setTypingUser(null)
+   453→    sock.emit('typing', { user: profile.name, typing: false })
+   454→    setInput('')
+   455→  }
+   456→
+   457→  const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+   458→    setInput(e.target.value)
+   459→    const sock = socketRef.current
+   460→    if (sock && sock.connected && e.target.value.trim() && profile.name) {
+   461→      sock.emit('typing', { user: profile.name, typing: true })
+   462→    }
+   463→  }
+   464→
+   465→  const presencePill = connected ? (
+   466→    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-inset ring-emerald-400/30">
+   467→      <Circle className="h-2 w-2 fill-emerald-400 text-emerald-400 animate-pulse" />
+   468→      {online} online
+   469→    </span>
+   470→  ) : (
+   471→    <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-300 ring-1 ring-inset ring-amber-400/30">
+   472→      <Radio className="h-3 w-3 animate-pulse" />
+   473→      reconnecting…
+   474→    </span>
+   475→  )
+   476→
+   477→  const myName = profile.name
+   478→  const rosterOthers = roster
+   479→
+   480→  return (
+   481→    <motion.div
+   482→      initial={{ opacity: 0, y: 18 }}
+   483→      animate={{ opacity: 1, y: 0 }}
+   484→      exit={{ opacity: 0, y: -10 }}
+   485→      transition={{ duration: 0.4, ease: 'easeOut' }}
+   486→      className="mx-auto flex h-[78vh] w-full max-w-4xl overflow-hidden rounded-3xl glass glass-sheen"
+   487→    >
+   488→      {/* Channels sidebar */}
+   489→      <aside className="hidden w-60 shrink-0 flex-col border-r border-white/10 bg-black/20 sm:flex">
+   490→        <div className="flex items-center gap-2 border-b border-white/10 px-4 py-4">
+   491→          <MessagesSquare className="h-4.5 w-4.5 text-fuchsia-200" />
+   492→          <span className="text-sm font-semibold text-white">Channels</span>
+   493→        </div>
+   494→        <div className="flex-1 overflow-y-auto p-2 glass-scroll">
+   495→          {CHANNELS.map((r) => (
+   496→            <button
+   497→              key={r.id}
+   498→              disabled={!r.live}
+   499→              title={r.live ? 'Live channel' : 'Coming soon'}
+   500→              className={cn(
+   501→                'group mb-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors',
+   502→                r.live
+   503→                  ? 'bg-white/12 text-white'
+   504→                  : 'cursor-not-allowed text-white/35 hover:bg-transparent',
+   505→              )}
+   506→            >
+   507→              <Hash className="h-4 w-4 shrink-0 text-white/40" />
+   508→              <span className="flex-1 truncate">{r.name}</span>
+   509→              {r.live ? (
+   510→                <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-emerald-300">
+   511→                  <Circle className="h-1.5 w-1.5 fill-emerald-400 text-emerald-400" />
+   512→                  live
+   513→                </span>
+   514→              ) : null}
+   515→            </button>
+   516→          ))}
+   517→
+   518→          {/* Online roster */}
+   519→          <div className="mt-3 px-2">
+   520→            <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[10px] font-bold uppercase tracking-wider text-white/40">
+   521→              <Users className="h-3 w-3" />
+   522→              <span>online — {rosterOthers.length}</span>
+   523→            </div>
+   524→            <div className="space-y-1">
+   525→              <AnimatePresence initial={false}>
+   526→                {rosterOthers.map((p) => {
+   527→                  const me = p.user === myName && myName !== ''
+   528→                  return (
+   529→                    <motion.div
+   530→                      key={p.id}
+   531→                      layout
+   532→                      initial={{ opacity: 0, x: -6 }}
+   533→                      animate={{ opacity: 1, x: 0 }}
+   534→                      exit={{ opacity: 0, x: -6 }}
+   535→                      transition={{ duration: 0.18 }}
+   536→                      className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/8"
+   537→                    >
+   538→                      <Avatar avatar={p.avatar} name={p.user} size="sm" />
+   539→                      <span
+   540→                        className={cn(
+   541→                          'flex-1 truncate text-xs',
+   542→                          me ? 'font-semibold' : 'font-medium',
+   543→                          p.color,
+   544→                        )}
+   545→                      >
+   546→                        {p.user}
+   547→                        {me ? (
+   548→                          <span className="ml-1 text-[10px] text-white/40">(you)</span>
+   549→                        ) : null}
+   550→                      </span>
+   551→                    </motion.div>
+   552→                  )
+   553→                })}
+   554→              </AnimatePresence>
+   555→              {rosterOthers.length === 0 ? (
+   556→                <p className="px-2 py-1 text-[11px] text-white/30">no one online</p>
+   557→              ) : null}
+   558→            </div>
+   559→          </div>
+   560→        </div>
+   561→
+   562→        {/* You + edit profile */}
+   563→        <div className="border-t border-white/10 p-3">
+   564→          <div className="flex items-center gap-2 rounded-xl glass-subtle px-2.5 py-2 text-xs text-white/60">
+   565→            <Avatar avatar={profile.avatar} name={profile.name || 'guest'} size="sm" />
+   566→            <span className="min-w-0 flex-1 truncate">
+   567→              you are{' '}
+   568→              <span className={cn('font-semibold', profile.color)}>
+   569→                {profile.name || '…'}
+   570→              </span>
+   571→            </span>
+   572→            <button
+   573→              type="button"
+   574→              onClick={openEditor}
+   575→              title="Edit profile"
+   576→              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-white/60 transition-colors hover:bg-white/12 hover:text-white"
+   577→            >
+   578→              <Pencil className="h-3.5 w-3.5" />
+   579→            </button>
+   580→          </div>
+   581→        </div>
+   582→      </aside>
+   583→
+   584→      {/* Conversation */}
+   585→      <div className="flex min-w-0 flex-1 flex-col">
+   586→        <header className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+   587→          <Hash className="h-5 w-5 text-white/40" />
+   588→          <div className="min-w-0 flex-1">
+   589→            <div className="flex items-center gap-2">
+   590→              <span className="text-sm font-semibold text-white">general</span>
+   591→              <span className="inline-flex items-center gap-1 text-[10px] text-emerald-300">
+   592→                <Circle className="h-2 w-2 fill-emerald-400 text-emerald-400" /> live relay
+   593→              </span>
+   594→            </div>
+   595→            <p className="truncate text-xs text-white/45">
+   596→              {connected ? 'the live relay — open to all drifters' : 'connecting to relay…'}
+   597→            </p>
+   598→          </div>
+   599→          {/* mobile: show edit profile since the sidebar is hidden */}
+   600→          <button
+   601→            type="button"
+   602→            onClick={openEditor}
+   603→            title="Edit profile"
+   604→            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl glass-subtle text-white/70 transition-colors hover:text-white sm:hidden"
+   605→          >
+   606→            <Pencil className="h-4 w-4" />
+   607→          </button>
+   608→          {presencePill}
+   609→        </header>
+   610→
+   611→        <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-5 py-4 glass-scroll">
+   612→          {!connected && messages.length === 0 ? (
+   613→            <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-white/45">
+   614→              <Radio className="h-6 w-6 animate-pulse text-fuchsia-300" />
+   615→              <p className="text-sm">connecting to relay…</p>
+   616→              <p className="text-[11px] text-white/30">establishing websocket handshake</p>
+   617→            </div>
+   618→          ) : (
+   619→            <AnimatePresence initial={false}>
+   620→              {messages.map((m) => {
+   621→                const mine = m.user === myName && myName !== ''
+   622→                return (
+   623→                  <motion.div
+   624→                    key={m.id}
+   625→                    initial={{ opacity: 0, y: 10 }}
+   626→                    animate={{ opacity: 1, y: 0 }}
+   627→                    transition={{ duration: 0.25 }}
+   628→                    className="flex items-start gap-3"
+   629→                  >
+   630→                    <Avatar avatar={m.avatar} name={m.user} size="md" />
+   631→                    <div className="min-w-0">
+   632→                      <div className="flex items-baseline gap-2">
+   633→                        <span className={cn('text-sm font-semibold', m.color)}>
+   634→                          {m.user}
+   635→                          {mine ? <span className="ml-1 text-[10px] text-white/40">(you)</span> : null}
+   636→                        </span>
+   637→                        <span className="text-[10px] text-white/30">{formatTime(m.time)}</span>
+   638→                      </div>
+   639→                      <p className="text-sm leading-relaxed text-white/80">{m.text}</p>
+   640→                    </div>
+   641→                  </motion.div>
+   642→                )
+   643→              })}
+   644→            </AnimatePresence>
+   645→          )}
+   646→
+   647→          {/* typing indicator */}
+   648→          <AnimatePresence>
+   649→            {typingUser && typingUser !== myName ? (
+   650→              <motion.div
+   651→                key="typing"
+   652→                initial={{ opacity: 0, y: 6 }}
+   653→                animate={{ opacity: 1, y: 0 }}
+   654→                exit={{ opacity: 0, y: -4 }}
+   655→                className="flex items-center gap-2 pl-12 text-xs text-white/45"
+   656→              >
+   657→                <span className="flex items-center gap-1">
+   658→                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50 [animation-delay:-0.3s]" />
+   659→                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50 [animation-delay:-0.15s]" />
+   660→                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50" />
+   661→                </span>
+   662→                <span>
+   663→                  <span className="font-semibold text-white/70">{typingUser}</span> is typing…
+   664→                </span>
+   665→              </motion.div>
+   666→            ) : null}
+   667→          </AnimatePresence>
+   668→        </div>
+   669→
+   670→        {/* Quick reactions */}
+   671→        <div className="flex flex-wrap gap-1.5 px-5 pb-2">
+   672→          {QUICK.map((q) => (
+   673→            <button
+   674→              key={q}
+   675→              type="button"
+   676→              onClick={() => setInput(q)}
+   677→              className="rounded-full glass-subtle px-2.5 py-1 text-[11px] text-white/60 transition-colors hover:bg-white/15 hover:text-white"
+   678→            >
+   679→              {q}
+   680→            </button>
+   681→          ))}
+   682→        </div>
+   683→
+   684→        <form
+   685→          onSubmit={(e) => {
+   686→            e.preventDefault()
+   687→            send()
+   688→          }}
+   689→          className="flex items-center gap-2 border-t border-white/10 p-3"
+   690→        >
+   691→          <input
+   692→            value={input}
+   693→            onChange={onInputChange}
+   694→            maxLength={500}
+   695→            disabled={!connected}
+   696→            placeholder={connected ? 'Message #general' : 'waiting for relay…'}
+   697→            className="glass-subtle flex-1 rounded-xl border border-white/10 bg-transparent px-4 py-2.5 text-sm text-white placeholder:text-white/35 focus:border-fuchsia-400/40 focus:outline-none disabled:opacity-50"
+   698→          />
+   699→          <button
+   700→            type="submit"
+   701→            disabled={!connected || !input.trim()}
+   702→            className="glass-sheen grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 text-white transition-transform hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+   703→          >
+   704→            <Send className="h-4.5 w-4.5" />
+   705→          </button>
+   706→        </form>
+   707→      </div>
+   708→
+   709→      {/* Profile editor modal */}
+   710→      <AnimatePresence>
+   711→        {editing ? (
+   712→          <motion.div
+   713→            key="overlay"
+   714→            initial={{ opacity: 0 }}
+   715→            animate={{ opacity: 1 }}
+   716→            exit={{ opacity: 0 }}
+   717→            transition={{ duration: 0.2 }}
+   718→            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+   719→            onClick={() => setEditing(false)}
+   720→          >
+   721→            <motion.div
+   722→              key="modal"
+   723→              initial={{ opacity: 0, scale: 0.96, y: 8 }}
+   724→              animate={{ opacity: 1, scale: 1, y: 0 }}
+   725→              exit={{ opacity: 0, scale: 0.96, y: 8 }}
+   726→              transition={{ duration: 0.2, ease: 'easeOut' }}
+   727→              onClick={(e) => e.stopPropagation()}
+   728→              className="w-full max-w-md overflow-hidden rounded-2xl glass glass-sheen p-5 shadow-2xl"
+   729→            >
+   730→              <div className="mb-4 flex items-center justify-between">
+   731→                <div className="flex items-center gap-2">
+   732→                  <Sparkles className="h-4 w-4 text-fuchsia-200" />
+   733→                  <h2 className="text-sm font-semibold text-white">Edit profile</h2>
+   734→                </div>
+   735→                <button
+   736→                  type="button"
+   737→                  onClick={() => setEditing(false)}
+   738→                  className="grid h-7 w-7 place-items-center rounded-lg text-white/60 hover:bg-white/10 hover:text-white"
+   739→                >
+   740→                  <X className="h-4 w-4" />
+   741→                </button>
+   742→              </div>
+   743→
+   744→              {/* live preview */}
+   745→              <div className="mb-4 flex items-center gap-3 rounded-xl glass-subtle p-3">
+   746→                <Avatar avatar={draftAvatar} name={draftName || 'guest'} size="lg" />
+   747→                <div className="min-w-0">
+   748→                  <p className={cn('truncate text-sm font-semibold', draftColor || 'text-white')}>
+   749→                    {draftName || 'guest'}
+   750→                  </p>
+   751→                  <p className="text-[11px] text-white/40">preview</p>
+   752→                </div>
+   753→              </div>
+   754→
+   755→              {/* display name */}
+   756→              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-white/45">
+   757→                Display name
+   758→              </label>
+   759→              <input
+   760→                value={draftName}
+   761→                onChange={(e) => setDraftName(e.target.value.slice(0, 24))}
+   762→                maxLength={24}
+   763→                placeholder="guest-1234"
+   764→                className="mb-4 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/35 focus:border-fuchsia-400/40 focus:outline-none"
+   765→              />
+   766→
+   767→              {/* color */}
+   768→              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-white/45">
+   769→                Color
+   770→              </label>
+   771→              <div className="mb-4 flex flex-wrap gap-2">
+   772→                {COLORS.map((c) => (
+   773→                  <button
+   774→                    key={c}
+   775→                    type="button"
+   776→                    onClick={() => setDraftColor(c)}
+   777→                    className={cn(
+   778→                      'grid h-7 w-7 place-items-center rounded-full ring-2 transition-transform hover:scale-110',
+   779→                      c,
+   780→                      draftColor === c ? 'ring-white/80' : 'ring-transparent',
+   781→                    )}
+   782→                    title={c}
+   783→                  >
+   784→                    {draftColor === c ? <Check className="h-3.5 w-3.5" /> : null}
+   785→                  </button>
+   786→                ))}
+   787→              </div>
+   788→
+   789→              {/* avatar mode tabs */}
+   790→              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-white/45">
+   791→                Avatar
+   792→              </label>
+   793→              <div className="mb-3 grid grid-cols-3 gap-1 rounded-xl bg-black/30 p-1">
+   794→                {([
+   795→                  { id: 'preset', label: 'Preset', Icon: Sparkles },
+   796→                  { id: 'emoji', label: 'Emoji', Icon: Smile },
+   797→                  { id: 'upload', label: 'Upload', Icon: Upload },
+   798→                ] as const).map(({ id, label, Icon }) => (
+   799→                  <button
+   800→                    key={id}
+   801→                    type="button"
+   802→                    onClick={() => setAvatarMode(id)}
+   803→                    className={cn(
+   804→                      'flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-medium transition-colors',
+   805→                      avatarMode === id
+   806→                        ? 'bg-white/15 text-white'
+   807→                        : 'text-white/55 hover:text-white',
+   808→                    )}
+   809→                  >
+   810→                    <Icon className="h-3.5 w-3.5" />
+   811→                    {label}
+   812→                  </button>
+   813→                ))}
+   814→              </div>
+   815→
+   816→              {/* avatar picker body */}
+   817→              <div className="mb-4 min-h-[7rem]">
+   818→                {avatarMode === 'preset' ? (
+   819→                  <div className="grid grid-cols-8 gap-2">
+   820→                    {PRESET_GRADIENTS.map((g, i) => (
+   821→                      <button
+   822→                        key={i}
+   823→                        type="button"
+   824→                        onClick={() => setDraftAvatar(`preset:${i}`)}
+   825→                        title={`Preset ${i + 1}`}
+   826→                        className={cn(
+   827→                          'grid aspect-square place-items-center rounded-full bg-gradient-to-br text-xs font-bold text-white transition-transform hover:scale-110',
+   828→                          g,
+   829→                          draftAvatar === `preset:${i}`
+   830→                            ? 'ring-2 ring-white/90 ring-offset-2 ring-offset-black/40'
+   831→                            : '',
+   832→                        )}
+   833→                      >
+   834→                        {initialOf(draftName)}
+   835→                      </button>
+   836→                    ))}
+   837→                  </div>
+   838→                ) : null}
+   839→
+   840→                {avatarMode === 'emoji' ? (
+   841→                  <div className="grid grid-cols-8 gap-1.5">
+   842→                    {EMOJIS.map((em, i) => (
+   843→                      <button
+   844→                        key={`${em}-${i}`}
+   845→                        type="button"
+   846→                        onClick={() => setDraftAvatar(em)}
+   847→                        className={cn(
+   848→                          'grid aspect-square place-items-center rounded-lg text-lg transition-colors hover:bg-white/12',
+   849→                          draftAvatar === em
+   850→                            ? 'bg-white/15 ring-2 ring-white/80'
+   851→                            : '',
+   852→                        )}
+   853→                      >
+   854→                        {em}
+   855→                      </button>
+   856→                    ))}
+   857→                  </div>
+   858→                ) : null}
+   859→
+   860→                {avatarMode === 'upload' ? (
+   861→                  <div className="flex flex-col items-center gap-3">
+   862→                    <label
+   863→                      htmlFor="avatar-upload"
+   864→                      className="flex w-full cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-white/20 bg-black/20 px-4 py-5 text-center transition-colors hover:border-fuchsia-400/40 hover:bg-white/5"
+   865→                    >
+   866→                      {uploading ? (
+   867→                        <Radio className="h-5 w-5 animate-pulse text-fuchsia-300" />
+   868→                      ) : (
+   869→                        <ImageIcon className="h-5 w-5 text-white/50" />
+   870→                      )}
+   871→                      <span className="text-xs text-white/60">
+   872→                        {uploading ? 'shrinking…' : 'click to choose an image'}
+   873→                      </span>
+   874→                      <span className="text-[10px] text-white/30">
+   875→                        auto-downscaled to ≤{AVATAR_MAX} chars
+   876→                      </span>
+   877→                      <input
+   878→                        id="avatar-upload"
+   879→                        type="file"
+   880→                        accept="image/*"
+   881→                        className="hidden"
+   882→                        onChange={(e) => {
+   883→                          const f = e.target.files?.[0]
+   884→                          if (f) void handleUpload(f)
+   885→                          e.target.value = ''
+   886→                        }}
+   887→                      />
+   888→                    </label>
+   889→                    {isUrl(draftAvatar) ? (
+   890→                      <div className="flex items-center gap-2 text-xs text-white/60">
+   891→                        <Avatar avatar={draftAvatar} name={draftName} size="sm" />
+   892→                        <span>uploaded</span>
+   893→                        <button
+   894→                          type="button"
+   895→                          onClick={() => setDraftAvatar('preset:0')}
+   896→                          className="text-white/40 underline-offset-2 hover:text-white hover:underline"
+   897→                        >
+   898→                          remove
+   899→                        </button>
+   900→                      </div>
+   901→                    ) : null}
+   902→                  </div>
+   903→                ) : null}
+   904→              </div>
+   905→
+   906→              {/* actions */}
+   907→              <div className="flex gap-2">
+   908→                <button
+   909→                  type="button"
+   910→                  onClick={() => setEditing(false)}
+   911→                  className="flex-1 rounded-xl glass-subtle px-4 py-2 text-sm font-medium text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+   912→                >
+   913→                  Cancel
+   914→                </button>
+   915→                <button
+   916→                  type="button"
+   917→                  onClick={saveProfile}
+   918→                  className="flex-1 rounded-xl bg-gradient-to-br from-fuchsia-500/70 to-violet-600/70 px-4 py-2 text-sm font-semibold text-white transition-transform hover:scale-[1.02] active:scale-95"
+   919→                >
+   920→                  Save
+   921→                </button>
+   922→              </div>
+   923→            </motion.div>
+   924→          </motion.div>
+   925→        ) : null}
+   926→      </AnimatePresence>
+   927→    </motion.div>
+   928→  )
+   929→}
+   930→
