@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import CustomCursor from "@/components/jakob/custom-cursor";
 import SiteDisguise from "@/components/jakob/site-disguise";
 import PanicKey from "@/components/jakob/panic-key";
+import ThemeInitializer from "@/components/jakob/theme-initializer";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -59,6 +60,7 @@ export default function RootLayout({
       >
         {children}
         <Toaster />
+        <ThemeInitializer />
         <CustomCursor />
         <SiteDisguise />
         <PanicKey />

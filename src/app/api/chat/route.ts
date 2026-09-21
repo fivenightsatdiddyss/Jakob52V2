@@ -21,6 +21,8 @@ type ChatMsg = {
   color: string
   avatar: string
   time: string // ISO string
+  replyTo?: { id: string; user: string; text: string } | null
+  reactions?: Record<string, string[]> // emoji -> [sessionId, ...]
 }
 
 type RosterEntry = {
@@ -227,6 +229,7 @@ export async function POST(req: NextRequest) {
       color?: unknown
       avatar?: unknown
       channel?: unknown
+      replyTo?: unknown
     }
     const text = trim(b.text, MAX_TEXT)
     const user = trim(b.user, MAX_USER) || 'anon'
@@ -239,6 +242,18 @@ export async function POST(req: NextRequest) {
         { status: 400, headers: noStore },
       )
     }
+    // replyTo: { id, user, text } — validate shape
+    let replyTo: { id: string; user: string; text: string } | null = null
+    if (b.replyTo && typeof b.replyTo === 'object') {
+      const r = b.replyTo as { id?: unknown; user?: unknown; text?: unknown }
+      if (typeof r.id === 'string' && typeof r.user === 'string') {
+        replyTo = {
+          id: r.id.slice(0, 64),
+          user: r.user.slice(0, MAX_USER),
+          text: trim(r.text, 200),
+        }
+      }
+    }
     const msg: ChatMsg = {
       id: generateId(),
       user,
@@ -246,11 +261,56 @@ export async function POST(req: NextRequest) {
       color,
       avatar,
       time: new Date(now).toISOString(),
+      replyTo,
     }
     const messages = await readJSON<ChatMsg[]>(`messages:${channel}`, [])
     const safeMessages = Array.isArray(messages) ? messages : []
     const next = [...safeMessages, msg].slice(-MAX_HISTORY)
     await writeJSON(`messages:${channel}`, next)
+    return NextResponse.json(
+      { ok: true, message: msg },
+      { headers: noStore },
+    )
+  }
+
+  // ---- react: toggle an emoji reaction on a message ----
+  if (op === 'react') {
+    const b = body as {
+      messageId?: unknown
+      sessionId?: unknown
+      emoji?: unknown
+      channel?: unknown
+    }
+    const messageId = trim(b.messageId, 64)
+    const sessionId = trim(b.sessionId, MAX_SESSION_ID)
+    const emoji = typeof b.emoji === 'string' ? b.emoji.slice(0, 10).trim() : ''
+    const channel = (typeof b.channel === 'string' ? b.channel : 'general').replace(/[^a-z0-9-]/gi, '').slice(0, 24) || 'general'
+    if (!messageId || !sessionId || !emoji) {
+      return NextResponse.json(
+        { ok: false, error: 'missing messageId/sessionId/emoji' },
+        { status: 400, headers: noStore },
+      )
+    }
+    const messages = await readJSON<ChatMsg[]>(`messages:${channel}`, [])
+    const safeMessages = Array.isArray(messages) ? messages : []
+    const idx = safeMessages.findIndex((m) => m.id === messageId)
+    if (idx < 0) {
+      return NextResponse.json(
+        { ok: false, error: 'message not found' },
+        { status: 404, headers: noStore },
+      )
+    }
+    const msg = safeMessages[idx]
+    const reactions = msg.reactions ? { ...msg.reactions } : {}
+    const list = reactions[emoji] ? [...reactions[emoji]] : []
+    const i = list.indexOf(sessionId)
+    if (i >= 0) list.splice(i, 1) // toggle off
+    else list.push(sessionId) // toggle on
+    if (list.length > 0) reactions[emoji] = list
+    else delete reactions[emoji]
+    msg.reactions = Object.keys(reactions).length > 0 ? reactions : undefined
+    safeMessages[idx] = msg
+    await writeJSON(`messages:${channel}`, safeMessages)
     return NextResponse.json(
       { ok: true, message: msg },
       { headers: noStore },

@@ -322,3 +322,135 @@
 html, body {
   height: 100%;
 }
+
+/* ===========================================
+   THEME SYSTEM — space / ocean / halloween
+   Override Tailwind's color CSS variables per
+   theme so every utility (text-*, bg-*, from-*,
+   to-*, border-*) automatically picks up the
+   new palette without touching any component.
+   =========================================== */
+
+/* ---- OCEAN: blue + brighter + sand ---- */
+[data-theme="ocean"] {
+  --color-fuchsia-100: #e0f2fe;
+  --color-fuchsia-200: #bae6fd;
+  --color-fuchsia-300: #7dd3fc;
+  --color-fuchsia-400: #38bdf8;
+  --color-fuchsia-500: #3b82f6;
+  --color-fuchsia-600: #2563eb;
+  --color-fuchsia-900: #172554;
+  --color-violet-300: #67e8f9;
+  --color-violet-500: #06b6d4;
+  --color-violet-600: #0284c7;
+  --color-violet-900: #083344;
+  background-color: #0a1929;
+}
+[data-theme="ocean"] body {
+  background-color: #0a1929;
+}
+[data-theme="ocean"] ::selection {
+  background: rgba(59, 130, 246, 0.35);
+}
+/* The shiny title gradient — blue/cyan/sand for ocean */
+[data-theme="ocean"] .text-shiny {
+  background: linear-gradient(
+    100deg,
+    #7dd3fc 0%, #bae6fd 28%, #ffffff 48%, #ffffff 52%,
+    #fcd34d 72%, #7dd3fc 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: text-sheen 4.5s linear infinite;
+}
+[data-theme="ocean"] .text-glow {
+  text-shadow:
+    0 0 20px rgba(59, 130, 246, 0.5),
+    0 0 40px rgba(59, 130, 246, 0.3),
+    0 0 80px rgba(6, 182, 212, 0.2);
+}
+/* Cursor — blue ring for ocean */
+[data-theme="ocean"] .cursor-ring {
+  border-color: rgba(56, 189, 248, 0.8) !important;
+  box-shadow: 0 0 12px 2px rgba(59, 130, 246, 0.45), inset 0 0 8px 1px rgba(59, 130, 246, 0.25) !important;
+}
+
+/* ---- HALLOWEEN: orange + green ---- */
+[data-theme="halloween"] {
+  --color-fuchsia-100: #ffedd5;
+  --color-fuchsia-200: #fed7aa;
+  --color-fuchsia-300: #fdba74;
+  --color-fuchsia-400: #fb923c;
+  --color-fuchsia-500: #f97316;
+  --color-fuchsia-600: #ea580c;
+  --color-fuchsia-900: #431407;
+  --color-violet-300: #86efac;
+  --color-violet-500: #22c55e;
+  --color-violet-600: #ea580c;
+  --color-violet-900: #052e16;
+  background-color: #0d0604;
+}
+[data-theme="halloween"] body {
+  background-color: #0d0604;
+}
+[data-theme="halloween"] ::selection {
+  background: rgba(249, 115, 22, 0.35);
+}
+[data-theme="halloween"] .text-shiny {
+  background: linear-gradient(
+    100deg,
+    #f97316 0%, #fdba74 28%, #fffbeb 48%, #fffbeb 52%,
+    #86efac 72%, #f97316 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: text-sheen 4.5s linear infinite;
+}
+[data-theme="halloween"] .text-glow {
+  text-shadow:
+    0 0 20px rgba(249, 115, 22, 0.5),
+    0 0 40px rgba(249, 115, 22, 0.3),
+    0 0 80px rgba(34, 197, 94, 0.2);
+}
+[data-theme="halloween"] .cursor-ring {
+  border-color: rgba(251, 146, 60, 0.8) !important;
+  box-shadow: 0 0 12px 2px rgba(249, 115, 22, 0.45), inset 0 0 8px 1px rgba(249, 115, 22, 0.25) !important;
+}
+
+/* ---- Pumpkin flicker animation (halloween bg) ---- */
+@keyframes pumpkin-flicker {
+  0%, 100% { opacity: 1; filter: brightness(1) blur(2px); }
+  25% { opacity: 0.92; filter: brightness(0.85) blur(3px); }
+  50% { opacity: 1; filter: brightness(1.1) blur(2px); }
+  75% { opacity: 0.95; filter: brightness(0.9) blur(2.5px); }
+}
+@keyframes bat-fly {
+  0% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(30vw, -10vh) scale(0.7); }
+  50% { transform: translate(60vw, 5vh) scale(0.5); }
+  75% { transform: translate(30vw, -15vh) scale(0.7); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+
+/* ---- Ocean wave animation ---- */
+@keyframes wave-move {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+@keyframes bubble-rise {
+  0% { transform: translateY(0) translateX(0); opacity: 0; }
+  10% { opacity: 0.6; }
+  90% { opacity: 0.6; }
+  100% { transform: translateY(-100vh) translateX(20px); opacity: 0; }
+}
+@keyframes fish-swim {
+  0% { transform: translateX(-10vw) translateY(0); }
+  50% { transform: translateX(50vw) translateY(-20px); }
+  100% { transform: translateX(110vw) translateY(0); }
+}

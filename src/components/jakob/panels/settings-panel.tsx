@@ -13,11 +13,15 @@ import {
   Wand2,
   ExternalLink,
   ShieldCheck,
+  Orbit,
+  Waves,
+  Ghost as GhostIcon,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useThemeStore, type Theme } from '../theme-store'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
@@ -541,6 +545,77 @@ function PanicKeySection() {
   )
 }
 
+/**
+ * BackgroundSection — choose the site-wide background theme.
+ * Each theme also remaps the accent colors (purple → blue/orange) via CSS
+ * variables in globals.css.
+ */
+function BackgroundSection() {
+  const theme = useThemeStore((s) => s.theme)
+  const setTheme = useThemeStore((s) => s.setTheme)
+
+  const options: { id: Theme; label: string; desc: string; icon: React.ElementType; gradient: string }[] = [
+    { id: 'space', label: 'Space', desc: 'black hole + starfield · purple', icon: Orbit, gradient: 'from-violet-500/40 to-fuchsia-500/30' },
+    { id: 'ocean', label: 'Ocean', desc: 'fluid water + coral · blue & sand', icon: Waves, gradient: 'from-sky-500/40 to-cyan-500/30' },
+    { id: 'halloween', label: 'Halloween', desc: 'glowing pumpkin · orange & green', icon: GhostIcon, gradient: 'from-orange-500/40 to-green-500/30' },
+  ]
+
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.05, duration: 0.5 }}
+      className="glass glass-sheen mb-6 rounded-3xl p-6"
+    >
+      <div className="mb-4 flex items-center gap-3">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-white/10 text-fuchsia-200">
+          <Sparkles className="h-4.5 w-4.5" />
+        </div>
+        <div>
+          <h3 className="text-sm font-semibold text-white">Background</h3>
+          <p className="text-xs text-white/45">changes the whole site's vibe + colors.</p>
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {options.map((o) => {
+          const active = theme === o.id
+          return (
+            <button
+              key={o.id}
+              onClick={() => {
+                setTheme(o.id)
+                toast.success(`background: ${o.label}`)
+              }}
+              className={cn(
+                'relative overflow-hidden rounded-2xl border p-4 text-left transition-all',
+                active
+                  ? 'border-fuchsia-400/40 bg-fuchsia-500/10 ring-1 ring-inset ring-fuchsia-400/30'
+                  : 'border-white/8 bg-white/4 hover:bg-white/8',
+              )}
+            >
+              <div
+                className={cn(
+                  'grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br text-white',
+                  o.gradient,
+                )}
+              >
+                <o.icon className="h-5 w-5" />
+              </div>
+              <h4 className="mt-3 text-sm font-semibold text-white">{o.label}</h4>
+              <p className="mt-0.5 text-[11px] text-white/45">{o.desc}</p>
+              {active && (
+                <span className="absolute right-3 top-3 text-[10px] font-bold uppercase tracking-wider text-fuchsia-300">
+                  active
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+    </motion.section>
+  )
+}
+
 export default function SettingsPanel() {
   const [glassIntensity, setGlassIntensity] = useState(70)
   const [motionReduce, setMotionReduce] = useState(false)
@@ -614,6 +689,9 @@ export default function SettingsPanel() {
 
       {/* Panic Key — instant redirect on a keypress */}
       <PanicKeySection />
+
+      {/* Background theme — space / ocean / halloween */}
+      <BackgroundSection />
 
       {/* Liquid glass intensity */}
       <section className="glass glass-sheen mb-6 rounded-3xl p-6">

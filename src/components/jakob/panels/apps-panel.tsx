@@ -32,6 +32,12 @@ const APPS: App[] = [
     desc: 'sound clips & effects',
     gradient: 'from-fuchsia-500/40 to-violet-600/30',
   },
+  {
+    name: 'Godot 3.7',
+    url: 'https://metal.6d5ef1fdb68c5ab10b7c90f1796f711153.apexflightacademy.com/tools/godot/godot.tools.html',
+    desc: 'game engine · in-browser',
+    gradient: 'from-blue-500/40 to-indigo-600/30',
+  },
 ]
 
 export default function AppsPanel() {

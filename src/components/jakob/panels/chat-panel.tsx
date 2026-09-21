@@ -17,6 +17,8 @@ import {
   Check,
   Users,
   Video,
+  CornerUpLeft,
+  SmilePlus,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -29,6 +31,8 @@ type ChatMsg = {
   color: string
   avatar: string
   time: string
+  replyTo?: { id: string; user: string; text: string } | null
+  reactions?: Record<string, string[]> // emoji -> [sessionId, ...]
 }
 
 type Profile = {
@@ -65,6 +69,9 @@ const CHANNELS = [
 ]
 
 const QUICK = ['nice', 'lol', '+1', 'on it', '✦']
+
+// Discord-style quick reactions
+const REACTION_EMOJIS = ['👍', '❤️', '😂', '🔥', '😮', '😢', '🎉', '👎']
 
 const COLORS = [
   'text-fuchsia-300',
@@ -293,6 +300,11 @@ export default function ChatPanel() {
   useEffect(() => {
     activeChannelRef.current = activeChannel
   }, [activeChannel])
+
+  // reply state — when set, shows a preview bar + sends with replyTo
+  const [replyingTo, setReplyingTo] = useState<ChatMsg | null>(null)
+  // reaction picker — which message's emoji picker is open
+  const [reactPickerFor, setReactPickerFor] = useState<string | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const sessionIdRef = useRef<string>('')
@@ -559,6 +571,10 @@ export default function ChatPanel() {
     if (!value) return
     const p = profileRef.current
     if (!p.name) return
+    // include replyTo if replying to a message
+    const rt = replyingTo
+      ? { id: replyingTo.id, user: replyingTo.user, text: replyingTo.text.slice(0, 200) }
+      : null
     // optimistic append — the next poll will reconcile/replace with the server copy
     const optimistic: ChatMsg = {
       id: `${OPTIMISTIC_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -567,6 +583,7 @@ export default function ChatPanel() {
       color: p.color,
       avatar: p.avatar,
       time: new Date().toISOString(),
+      replyTo: rt,
     }
     setMessages((prev) => [...prev, optimistic])
     postChat({
@@ -576,8 +593,10 @@ export default function ChatPanel() {
       color: p.color,
       avatar: p.avatar,
       channel: activeChannelRef.current,
+      replyTo: rt,
     })
-    // clear typing indicator
+    // clear reply + typing indicator
+    setReplyingTo(null)
     if (typingClearRef.current) clearTimeout(typingClearRef.current)
     typingClearRef.current = null
     setTypingUser(null)
@@ -586,6 +605,34 @@ export default function ChatPanel() {
       postChat({ op: 'typing', sessionId: sid, user: p.name, typing: false })
     }
     setInput('')
+  }
+
+  // ---- react to a message (toggle an emoji reaction) ----
+  const reactToMessage = (messageId: string, emoji: string) => {
+    const sid = sessionIdRef.current
+    if (!sid) return
+    postChat({
+      op: 'react',
+      messageId,
+      sessionId: sid,
+      emoji,
+      channel: activeChannelRef.current,
+    })
+    // optimistic local update
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m
+        const reactions = { ...(m.reactions || {}) }
+        const list = reactions[emoji] ? [...reactions[emoji]] : []
+        const i = list.indexOf(sid)
+        if (i >= 0) list.splice(i, 1)
+        else list.push(sid)
+        if (list.length > 0) reactions[emoji] = list
+        else delete reactions[emoji]
+        return { ...m, reactions: Object.keys(reactions).length > 0 ? reactions : undefined }
+      }),
+    )
+    setReactPickerFor(null)
   }
 
   const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -784,16 +831,25 @@ export default function ChatPanel() {
             <AnimatePresence initial={false}>
               {messages.map((m) => {
                 const mine = m.user === myName && myName !== ''
+                const mySession = sessionIdRef.current
                 return (
                   <motion.div
                     key={m.id}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.25 }}
-                    className="flex items-start gap-3"
+                    className="group relative flex items-start gap-3"
                   >
                     <Avatar avatar={m.avatar} name={m.user} size="md" />
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
+                      {/* reply preview */}
+                      {m.replyTo ? (
+                        <div className="mb-1 flex items-center gap-1.5 border-l-2 border-fuchsia-400/40 pl-2 text-[11px] text-white/40">
+                          <CornerUpLeft className="h-3 w-3 shrink-0" />
+                          <span className={cn('font-semibold', m.color)}>{m.replyTo.user}</span>
+                          <span className="truncate">{m.replyTo.text || '(empty)'}</span>
+                        </div>
+                      ) : null}
                       <div className="flex items-baseline gap-2">
                         <span className={cn('text-sm font-semibold', m.color)}>
                           {m.user}
@@ -802,6 +858,64 @@ export default function ChatPanel() {
                         <span className="text-[10px] text-white/30">{formatTime(m.time)}</span>
                       </div>
                       <p className="text-sm leading-relaxed text-white/80">{m.text}</p>
+
+                      {/* reactions */}
+                      {m.reactions && Object.keys(m.reactions).length > 0 ? (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {Object.entries(m.reactions).map(([emoji, sids]) => {
+                            const reacted = sids.includes(mySession)
+                            return (
+                              <button
+                                key={emoji}
+                                onClick={() => reactToMessage(m.id, emoji)}
+                                className={cn(
+                                  'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] transition-colors',
+                                  reacted
+                                    ? 'bg-fuchsia-500/25 text-fuchsia-100 ring-1 ring-fuchsia-400/30'
+                                    : 'bg-white/8 text-white/70 hover:bg-white/12',
+                                )}
+                              >
+                                <span>{emoji}</span>
+                                <span className="tabular-nums">{sids.length}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      ) : null}
+
+                      {/* hover action bar: reply + react */}
+                      <div className="absolute -top-3 right-0 flex items-center gap-0.5 rounded-lg glass-strong glass-sheen p-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                        <button
+                          onClick={() => setReplyingTo(m)}
+                          title="reply"
+                          className="grid h-7 w-7 place-items-center rounded-md text-white/50 transition-colors hover:bg-white/12 hover:text-white"
+                        >
+                          <CornerUpLeft className="h-3.5 w-3.5" />
+                        </button>
+                        <div className="relative">
+                          <button
+                            onClick={() => setReactPickerFor(reactPickerFor === m.id ? null : m.id)}
+                            title="react"
+                            className="grid h-7 w-7 place-items-center rounded-md text-white/50 transition-colors hover:bg-white/12 hover:text-white"
+                          >
+                            <SmilePlus className="h-3.5 w-3.5" />
+                          </button>
+                          {/* emoji picker popover */}
+                          {reactPickerFor === m.id ? (
+                            <div className="absolute bottom-full right-0 mb-1 flex items-center gap-0.5 rounded-xl glass-strong glass-sheen p-1.5">
+                              {REACTION_EMOJIS.map((emoji) => (
+                                <button
+                                  key={emoji}
+                                  onClick={() => reactToMessage(m.id, emoji)}
+                                  className="grid h-7 w-7 place-items-center rounded-md text-base transition-transform hover:scale-125 hover:bg-white/12"
+                                >
+                                  {emoji}
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   </motion.div>
                 )
@@ -845,6 +959,25 @@ export default function ChatPanel() {
             </button>
           ))}
         </div>
+
+        {/* Reply preview bar — shows when replying to a message */}
+        {replyingTo ? (
+          <div className="mx-3 mb-1 flex items-center gap-2 rounded-xl glass-subtle px-3 py-2 text-xs">
+            <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-fuchsia-300" />
+            <div className="min-w-0 flex-1">
+              <span className="text-white/40">replying to </span>
+              <span className={cn('font-semibold', replyingTo.color)}>{replyingTo.user}</span>
+              <p className="truncate text-white/50">{replyingTo.text}</p>
+            </div>
+            <button
+              onClick={() => setReplyingTo(null)}
+              className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-white/40 transition-colors hover:bg-white/12 hover:text-white"
+              title="cancel reply"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : null}
 
         <form
           onSubmit={(e) => {

@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Gamepad2, Search, X, Maximize2, Minimize2, Grid2x2, Loader2, RefreshCw } from 'lucide-react'
+import { Gamepad2, Search, X, Maximize2, Minimize2, Grid2x2, Loader2, RefreshCw, ExternalLink } from 'lucide-react'
 import { GAMES, type Game } from './games-data'
 import { cn } from '@/lib/utils'
 
@@ -32,6 +32,40 @@ export default function GamesPanel() {
   const [fullscreen, setFullscreen] = useState(false)
   const [iframeKey, setIframeKey] = useState(0)
   const [iframeLoading, setIframeLoading] = useState(false)
+  const overlayRef = useRef<HTMLDivElement>(null)
+
+  // Toggle real browser fullscreen (Fullscreen API) on the overlay container.
+  const toggleBrowserFullscreen = useCallback(async () => {
+    const el = overlayRef.current
+    if (!el) return
+    try {
+      if (!document.fullscreenElement) {
+        await el.requestFullscreen()
+      } else {
+        await document.exitFullscreen()
+      }
+    } catch {
+      // fallback: toggle CSS-only fullscreen if the API is unavailable
+      setFullscreen((v) => !v)
+    }
+  }, [])
+
+  // Open the game in a new about:blank tab (cloaked) with the game in a
+  // fullscreen srcdoc iframe.
+  const openInAboutBlank = useCallback((g: Game) => {
+    const loader = `<!DOCTYPE html><html><head><meta charset="utf-8"><title></title><style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000}iframe{border:0;width:100vw;height:100vh;display:block}</style></head><body><iframe src="${g.url}" allow="autoplay; fullscreen; gamepad; clipboard-read; clipboard-write; encrypted-media; payment; web-share; cross-origin-isolated" allowfullscreen></iframe></body></html>`
+    const srcdoc = loader.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    const outer = `<!DOCTYPE html><html><head><title></title><style>html,body{margin:0;padding:0;height:100%;background:#000}iframe{border:0;width:100vw;height:100vh;display:block}</style></head><body><iframe srcdoc="${srcdoc}" allow="autoplay; fullscreen; gamepad; clipboard-read; clipboard-write; encrypted-media; payment; web-share; cross-origin-isolated" allowfullscreen></iframe></body></html>`
+    const win = window.open('about:blank', '_blank')
+    if (!win) return
+    try {
+      win.document.open()
+      win.document.write(outer)
+      win.document.close()
+    } catch {
+      win.location.href = g.url
+    }
+  }, [])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -67,19 +101,33 @@ export default function GamesPanel() {
     setFullscreen(false)
   }, [])
 
-  // esc to close, F for fullscreen
+  // esc to close, F for fullscreen (real browser fullscreen via Fullscreen API)
   useEffect(() => {
     if (!active) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (fullscreen) setFullscreen(false)
-        else closeGame()
+        // if in browser fullscreen, Esc exits fullscreen (browser handles it)
+        // but also handle CSS-fullscreen fallback
+        if (fullscreen && !document.fullscreenElement) setFullscreen(false)
+        else if (!document.fullscreenElement) closeGame()
       }
-      if (e.key === 'f' || e.key === 'F') setFullscreen((v) => !v)
+      if (e.key === 'f' || e.key === 'F') {
+        void toggleBrowserFullscreen()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [active, fullscreen, closeGame])
+  }, [active, fullscreen, closeGame, toggleBrowserFullscreen])
+
+  // Keep `fullscreen` state in sync with the browser's fullscreen API so the
+  // UI (padding, icon) updates when the user enters/exits fullscreen via Esc.
+  useEffect(() => {
+    const onFsChange = () => {
+      setFullscreen(!!document.fullscreenElement)
+    }
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => document.removeEventListener('fullscreenchange', onFsChange)
+  }, [])
 
   return (
     <motion.div
@@ -211,6 +259,7 @@ export default function GamesPanel() {
       <AnimatePresence>
         {active && (
           <motion.div
+            ref={overlayRef}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -248,7 +297,14 @@ export default function GamesPanel() {
                 <RefreshCw className={cn('h-4 w-4', iframeLoading && 'animate-spin')} />
               </button>
               <button
-                onClick={() => setFullscreen((v) => !v)}
+                onClick={() => openInAboutBlank(active)}
+                className="grid h-9 w-9 place-items-center rounded-xl text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+                title="open in about:blank"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </button>
+              <button
+                onClick={toggleBrowserFullscreen}
                 className="grid h-9 w-9 place-items-center rounded-xl text-white/60 transition-colors hover:bg-white/10 hover:text-white"
                 title="fullscreen (F)"
               >
