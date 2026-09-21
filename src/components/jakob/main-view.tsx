@@ -10,6 +10,7 @@ import {
   Globe,
   Film,
   Link2,
+  LayoutGrid,
   Orbit,
   Home,
   PanelLeftClose,
@@ -23,17 +24,19 @@ import MoviesPanel from './panels/movies-panel'
 import ChatPanel from './panels/chat-panel'
 import ProxyPanel from './panels/proxy-panel'
 import LinksPanel from './panels/links-panel'
+import AppsPanel from './panels/apps-panel'
 import HudOverlay from './hud-overlay'
 import AppShortcuts from './app-shortcuts'
 import { cn } from '@/lib/utils'
 
-type Tab = 'home' | 'settings' | 'ai' | 'games' | 'movies' | 'chat' | 'proxy' | 'links'
+type Tab = 'home' | 'settings' | 'ai' | 'games' | 'movies' | 'chat' | 'proxy' | 'links' | 'apps'
 
 const NAV: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: 'settings', label: 'Settings', icon: Settings },
   { id: 'ai', label: 'AI', icon: Bot },
   { id: 'games', label: 'Games', icon: Gamepad2 },
   { id: 'movies', label: 'Movies', icon: Film },
+  { id: 'apps', label: 'Apps', icon: LayoutGrid },
   { id: 'chat', label: 'Chat', icon: MessagesSquare },
   { id: 'links', label: 'Links', icon: Link2 },
   { id: 'proxy', label: 'Proxy', icon: Globe },
@@ -157,10 +160,12 @@ export default function MainView() {
           </span>
         </div>
 
-        {/* Floating hero (always present, dims when a panel is open) */}
+        {/* Floating hero (always present, dims when a panel is open).
+            Shifted upward (pb-44) so it clears the app-shortcuts row at the
+            bottom on shorter / PC viewports. */}
         <div
           className={cn(
-            'pointer-events-none absolute inset-0 flex flex-col items-center justify-center transition-all duration-700',
+            'pointer-events-none absolute inset-0 flex flex-col items-center justify-center pb-44 transition-all duration-700',
             tab !== 'home' ? 'opacity-15 blur-[1px] scale-95' : 'opacity-100'
           )}
         >
@@ -212,6 +217,7 @@ export default function MainView() {
                 {tab === 'ai' && <AiPanel />}
                 {tab === 'games' && <GamesPanel />}
                 {tab === 'movies' && <MoviesPanel />}
+                {tab === 'apps' && <AppsPanel />}
                 {tab === 'chat' && <ChatPanel />}
                 {tab === 'links' && <LinksPanel />}
                 {tab === 'proxy' && <ProxyPanel />}

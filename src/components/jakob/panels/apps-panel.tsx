@@ -3,46 +3,45 @@
 import { useState, useCallback, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, RefreshCw, Maximize2, Minimize2, ExternalLink, Loader2, Rocket } from 'lucide-react'
+import { LayoutGrid, X, RefreshCw, Maximize2, Minimize2, Loader2, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-type Shortcut = {
+type App = {
   name: string
-  domain: string
   url: string
-  /** tailwind gradient used for the tile's hover glow */
+  desc: string
   gradient: string
 }
 
-// Quick-launch apps on the home page. Each opens the site through the in-app
-// /api/proxy so it renders inside the site (cloaked behind the glass).
-const SHORTCUTS: Shortcut[] = [
-  { name: 'YouTube', domain: 'youtube.com', url: 'https://www.youtube.com', gradient: 'from-red-500/50 to-rose-600/40' },
-  { name: 'TikTok', domain: 'tiktok.com', url: 'https://www.tiktok.com', gradient: 'from-fuchsia-500/50 to-cyan-500/40' },
-  { name: 'Discord', domain: 'discord.com', url: 'https://discord.com/app', gradient: 'from-indigo-500/50 to-violet-600/40' },
-  { name: 'GeForce NOW', domain: 'play.geforcenow.com', url: 'https://play.geforcenow.com', gradient: 'from-emerald-500/50 to-green-600/40' },
-  { name: 'Netflix', domain: 'netflix.com', url: 'https://www.netflix.com', gradient: 'from-red-600/50 to-rose-700/40' },
-  { name: 'Spotify', domain: 'spotify.com', url: 'https://open.spotify.com', gradient: 'from-green-500/50 to-emerald-600/40' },
-  { name: 'Reddit', domain: 'reddit.com', url: 'https://www.reddit.com', gradient: 'from-orange-500/50 to-amber-600/40' },
-  { name: 'Twitch', domain: 'twitch.tv', url: 'https://www.twitch.tv', gradient: 'from-violet-500/50 to-purple-600/40' },
-  { name: 'Instagram', domain: 'instagram.com', url: 'https://www.instagram.com', gradient: 'from-pink-500/50 to-amber-500/40' },
-  { name: 'X', domain: 'x.com', url: 'https://x.com', gradient: 'from-zinc-400/50 to-zinc-600/40' },
-  { name: 'ChatGPT', domain: 'chatgpt.com', url: 'https://chatgpt.com', gradient: 'from-teal-500/50 to-emerald-600/40' },
-  { name: 'GitHub', domain: 'github.com', url: 'https://github.com', gradient: 'from-zinc-500/50 to-zinc-700/40' },
+const APPS: App[] = [
+  {
+    name: 'Blender',
+    url: 'https://metal.6d5ef1fdb68c5ab10b7c90f1796f711153.apexflightacademy.com/tools/blender/index.html',
+    desc: '3D creation suite · in-browser',
+    gradient: 'from-orange-500/40 to-amber-600/30',
+  },
+  {
+    name: 'Firefox',
+    url: 'https://metal.6d5ef1fdb68c5ab10b7c90f1796f711153.apexflightacademy.com/tools/firefox/index.html',
+    desc: 'a browser within the browser',
+    gradient: 'from-sky-500/40 to-blue-600/30',
+  },
+  {
+    name: 'Soundboard',
+    url: 'https://metal.6d5ef1fdb68c5ab10b7c90f1796f711153.apexflightacademy.com/games/30dolar/index.html',
+    desc: 'sound clips & effects',
+    gradient: 'from-fuchsia-500/40 to-violet-600/30',
+  },
 ]
 
-function favicon(domain: string, sz = 128) {
-  return `https://www.google.com/s2/favicons?domain=${domain}&sz=${sz}`
-}
-
-export default function AppShortcuts() {
-  const [active, setActive] = useState<Shortcut | null>(null)
+export default function AppsPanel() {
+  const [active, setActive] = useState<App | null>(null)
   const [fullscreen, setFullscreen] = useState(false)
   const [iframeKey, setIframeKey] = useState(0)
   const [loading, setLoading] = useState(false)
 
-  const open = useCallback((s: Shortcut) => {
-    setActive(s)
+  const open = useCallback((a: App) => {
+    setActive(a)
     setIframeKey((k) => k + 1)
     setLoading(true)
   }, [])
@@ -67,56 +66,61 @@ export default function AppShortcuts() {
 
   return (
     <>
-      {/* Shortcuts row — sits below the floating hero subtitle */}
       <motion.div
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 18 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.6, duration: 0.8, ease: 'easeOut' }}
-        className="pointer-events-auto relative z-10 mt-2 flex flex-wrap items-center justify-center gap-2.5"
+        exit={{ opacity: 0, y: -10 }}
+        transition={{ duration: 0.4, ease: 'easeOut' }}
+        className="mx-auto w-full max-w-5xl"
       >
-        {SHORTCUTS.map((s, i) => (
-          <motion.button
-            key={s.name}
-            initial={{ opacity: 0, scale: 0.85 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.7 + i * 0.04, duration: 0.35 }}
-            whileHover={{ y: -4, scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => open(s)}
-            title={`open ${s.name}`}
-            className="group flex flex-col items-center gap-1.5"
-          >
-            <div
-              className={cn(
-                'glass glass-sheen relative grid h-14 w-14 place-items-center overflow-hidden rounded-2xl transition-all sm:h-16 sm:w-16',
-                'hover:shadow-[0_0_24px_4px_rgba(168,85,247,0.35)]'
-              )}
+        <header className="mb-5 flex items-center gap-3">
+          <div className="grid h-11 w-11 place-items-center rounded-2xl glass-strong text-fuchsia-200">
+            <LayoutGrid className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold text-white">Apps</h2>
+            <p className="text-sm text-white/45">{APPS.length} tools · click to launch</p>
+          </div>
+        </header>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {APPS.map((a, i) => (
+            <motion.button
+              key={a.name}
+              initial={{ opacity: 0, y: 16, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{ delay: i * 0.08, duration: 0.4 }}
+              whileHover={{ y: -5 }}
+              onClick={() => open(a)}
+              className="glass glass-sheen group relative overflow-hidden rounded-3xl p-6 text-left"
             >
               <div
                 className={cn(
-                  'pointer-events-none absolute inset-0 bg-gradient-to-br opacity-0 transition-opacity group-hover:opacity-100',
-                  s.gradient
+                  'pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full bg-gradient-to-br opacity-50 blur-2xl transition-opacity group-hover:opacity-100',
+                  a.gradient
                 )}
               />
-              <img
-                src={favicon(s.domain)}
-                alt={s.name}
-                width={36}
-                height={36}
-                className="relative h-8 w-8 rounded-lg object-contain sm:h-9 sm:w-9"
-                loading="lazy"
-              />
-            </div>
-            <span className="text-[10px] font-medium text-white/55 transition-colors group-hover:text-white/90 sm:text-xs">
-              {s.name}
-            </span>
-          </motion.button>
-        ))}
+              <div className="relative">
+                <div
+                  className={cn(
+                    'grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br text-2xl font-black text-white',
+                    a.gradient
+                  )}
+                >
+                  {a.name[0]}
+                </div>
+                <h3 className="mt-4 text-lg font-bold text-white">{a.name}</h3>
+                <p className="text-xs text-white/50">{a.desc}</p>
+                <div className="mt-4 text-[11px] text-fuchsia-300 opacity-0 transition-opacity group-hover:opacity-100">
+                  launch →
+                </div>
+              </div>
+            </motion.button>
+          ))}
+        </div>
       </motion.div>
 
-      {/* Proxy viewer modal — portaled to document.body so it escapes the
-          framer-motion motion.div's stacking context (which would otherwise
-          trap the z-index below the home HUD's z-40). */}
+      {/* App player overlay — portaled to document.body to escape stacking contexts */}
       {typeof document !== 'undefined' && createPortal(
       <AnimatePresence>
         {active && (
@@ -136,18 +140,17 @@ export default function AppShortcuts() {
                 fullscreen && 'mx-2 mt-2'
               )}
             >
-              <div className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-xl bg-white/8">
-                <img
-                  src={favicon(active.domain, 64)}
-                  alt=""
-                  width={20}
-                  height={20}
-                  className="h-5 w-5 rounded object-contain"
-                />
+              <div
+                className={cn(
+                  'grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br text-sm font-black text-white',
+                  active.gradient
+                )}
+              >
+                {active.name[0]}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-semibold text-white">{active.name}</div>
-                <div className="truncate text-[10px] text-white/40">routed · in-app relay</div>
+                <div className="truncate text-[10px] text-white/40">{active.desc}</div>
               </div>
               <a
                 href={active.url}
@@ -195,16 +198,17 @@ export default function AppShortcuts() {
                 <div className="absolute inset-0 z-10 grid place-items-center bg-[#04020a]">
                   <div className="text-center">
                     <Loader2 className="mx-auto mb-3 h-9 w-9 animate-spin text-fuchsia-300" />
-                    <p className="text-sm text-white/60">routing {active.name}…</p>
+                    <p className="text-sm text-white/60">launching {active.name}…</p>
                   </div>
                 </div>
               )}
               <iframe
                 key={iframeKey}
-                src={`/api/proxy?url=${encodeURIComponent(active.url)}`}
+                src={active.url}
                 onLoad={() => setLoading(false)}
-                className="h-full w-full border-0 bg-white"
-                sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin"
+                className="h-full w-full border-0 bg-black"
+                allow="autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; gamepad; cross-origin-isolated"
+                allowFullScreen
                 referrerPolicy="no-referrer"
                 title={active.name}
               />

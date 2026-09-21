@@ -1,22 +1,143 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Link2, Star, X, RefreshCw, Maximize2, Minimize2, ExternalLink, Loader2, Calendar } from 'lucide-react'
-import { PROXY_LINKS, dailyFeatured, type ProxyLink } from './links-data'
+import {
+  Link2,
+  ChevronDown,
+  X,
+  RefreshCw,
+  Maximize2,
+  Minimize2,
+  ExternalLink,
+  Loader2,
+  Calendar,
+  Star,
+  Copy,
+  Check,
+} from 'lucide-react'
+import { DAILY_LINKS, formatDateLabel, isToday, type LinkSite } from './links-data'
 import { cn } from '@/lib/utils'
+import { toast } from 'sonner'
 
 export default function LinksPanel() {
-  // Daily featured is computed inline — this panel only mounts client-side
-  // when the user opens the Links tab, so there's no SSR/hydration concern.
-  const [featured] = useState<ProxyLink[]>(() => dailyFeatured(3))
-  const [active, setActive] = useState<ProxyLink | null>(null)
-  const [fullscreen, setFullscreen] = useState(false)
-  const [iframeKey, setIframeKey] = useState(0)
-  const [loading, setLoading] = useState(false)
+  // expanded dates — today is open by default
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    const today = DAILY_LINKS[0]?.date
+    return new Set(today ? [today] : [])
+  })
 
-  const open = useCallback((p: ProxyLink) => {
-    setActive(p)
+  const toggle = (date: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(date)) next.delete(date)
+      else next.add(date)
+      return next
+    })
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      transition={{ duration: 0.4, ease: 'easeOut' }}
+      className="mx-auto w-full max-w-3xl"
+    >
+      <header className="mb-5 flex items-center gap-3">
+        <div className="grid h-11 w-11 place-items-center rounded-2xl glass-strong text-fuchsia-200">
+          <Link2 className="h-5 w-5" />
+        </div>
+        <div>
+          <h2 className="text-2xl font-bold text-white">Links</h2>
+          <p className="text-sm text-white/45">daily drops · click a date to expand</p>
+        </div>
+      </header>
+
+      <div className="space-y-3">
+        {DAILY_LINKS.map((drop) => {
+          const isOpen = expanded.has(drop.date)
+          const today = isToday(drop.date)
+          return (
+            <div key={drop.date} className="glass glass-sheen overflow-hidden rounded-3xl">
+              {/* Date header — clickable dropdown */}
+              <button
+                onClick={() => toggle(drop.date)}
+                className="flex w-full items-center gap-3 p-5 text-left transition-colors hover:bg-white/4"
+              >
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-fuchsia-500/40 to-violet-500/30 text-white">
+                  <Calendar className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-white">
+                      {drop.label || formatDateLabel(drop.date)}
+                    </span>
+                    {today && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-fuchsia-500/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-fuchsia-200">
+                        <Star className="h-2.5 w-2.5 fill-fuchsia-300" />
+                        today
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-white/40">
+                    {drop.sites.length} {drop.sites.length === 1 ? 'site' : 'sites'}
+                  </p>
+                </div>
+                <ChevronDown
+                  className={cn(
+                    'h-5 w-5 shrink-0 text-white/50 transition-transform',
+                    isOpen && 'rotate-180'
+                  )}
+                />
+              </button>
+
+              {/* Expandable sites list */}
+              <AnimatePresence initial={false}>
+                {isOpen && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.3, ease: 'easeInOut' }}
+                    className="overflow-hidden"
+                  >
+                    <div className="space-y-3 border-t border-white/8 p-4">
+                      {drop.sites.map((site) => (
+                        <SiteCard key={site.name} site={site} />
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )
+        })}
+      </div>
+
+      {DAILY_LINKS.length === 0 && (
+        <div className="glass glass-sheen grid place-items-center rounded-3xl py-20 text-center">
+          <div>
+            <Link2 className="mx-auto mb-3 h-10 w-10 text-white/20" />
+            <p className="text-sm text-white/50">no links yet — check back tomorrow.</p>
+          </div>
+        </div>
+      )}
+    </motion.div>
+  )
+}
+
+/** A single site card with its name + all mirror links. */
+function SiteCard({ site }: { site: LinkSite }) {
+  const [active, setActive] = useState<string | null>(null)
+  const [fullscreen, setFullscreen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [iframeKey, setIframeKey] = useState(0)
+  const [copied, setCopied] = useState<string | null>(null)
+
+  const open = useCallback((url: string) => {
+    setActive(url)
     setIframeKey((k) => k + 1)
     setLoading(true)
   }, [])
@@ -26,6 +147,14 @@ export default function LinksPanel() {
     setFullscreen(false)
   }, [])
 
+  const copy = (url: string) => {
+    navigator.clipboard?.writeText(url).then(() => {
+      setCopied(url)
+      toast.success('copied to clipboard')
+      setTimeout(() => setCopied(null), 1500)
+    })
+  }
+
   useEffect(() => {
     if (!active) return
     const onKey = (e: KeyboardEvent) => {
@@ -33,123 +162,71 @@ export default function LinksPanel() {
         if (fullscreen) setFullscreen(false)
         else close()
       }
-      if (e.key === 'f' || e.key === 'F') setFullscreen((v) => !v)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [active, fullscreen, close])
 
-  const today = new Date().toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'short',
-    day: 'numeric',
-  })
-
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 18 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -10 }}
-      transition={{ duration: 0.4, ease: 'easeOut' }}
-      className="mx-auto w-full max-w-5xl"
-    >
-      <header className="mb-5 flex items-center gap-3">
-        <div className="grid h-11 w-11 place-items-center rounded-2xl glass-strong text-fuchsia-200">
-          <Link2 className="h-5 w-5" />
+    <>
+      <div className="rounded-2xl border border-white/8 bg-white/4 p-4">
+        <div className="mb-3 flex items-center gap-3">
+          <div
+            className={cn(
+              'grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br text-lg font-black text-white',
+              site.gradient
+            )}
+          >
+            {site.name[0]}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-bold text-white">{site.name}</h3>
+            <p className="text-[11px] text-white/45">{site.tagline}</p>
+          </div>
+          <span className="shrink-0 rounded-full bg-white/8 px-2 py-0.5 text-[10px] font-medium text-white/50">
+            {site.links.length} {site.links.length === 1 ? 'link' : 'links'}
+          </span>
         </div>
-        <div>
-          <h2 className="text-2xl font-bold text-white">Links</h2>
-          <p className="text-sm text-white/45">
-            daily rotating proxies · {PROXY_LINKS.length} services in range
-          </p>
-        </div>
-        <span className="ml-auto hidden items-center gap-1.5 rounded-full glass-subtle px-3 py-1.5 text-xs text-white/55 sm:inline-flex">
-          <Calendar className="h-3.5 w-3.5 text-fuchsia-300" />
-          {today}
-        </span>
-      </header>
 
-      {/* Daily featured */}
-      <section className="mb-6">
-        <div className="mb-3 flex items-center gap-2 px-1 text-xs uppercase tracking-widest text-white/40">
-          <Star className="h-3.5 w-3.5 text-amber-300" />
-          today's featured
-        </div>
-        <div className="grid gap-3 sm:grid-cols-3">
-          {featured.map((p, i) => (
-            <motion.button
-              key={p.name + i}
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.08, duration: 0.4 }}
-              whileHover={{ y: -4 }}
-              onClick={() => open(p)}
-              className="glass glass-sheen group relative overflow-hidden rounded-3xl p-5 text-left"
+        {/* Mirror links list */}
+        <div className="space-y-1.5">
+          {site.links.map((url, i) => (
+            <div
+              key={url + i}
+              className="flex items-center gap-2 rounded-xl bg-black/20 p-2"
             >
-              <div
-                className={cn(
-                  'pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full bg-gradient-to-br opacity-50 blur-2xl transition-opacity group-hover:opacity-90',
-                  p.gradient
-                )}
-              />
-              <div className="relative flex items-center justify-between">
-                <div
-                  className={cn(
-                    'grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br text-white',
-                    p.gradient
-                  )}
-                >
-                  <span className="text-lg font-black">{p.name[0]}</span>
-                </div>
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-                  <Star className="h-2.5 w-2.5 fill-amber-300" /> daily
-                </span>
-              </div>
-              <h3 className="relative mt-4 text-lg font-bold text-white">{p.name}</h3>
-              <p className="relative text-xs text-white/50">{p.tagline}</p>
-              <div className="relative mt-3 text-[11px] text-fuchsia-300 opacity-0 transition-opacity group-hover:opacity-100">
-                open →
-              </div>
-            </motion.button>
-          ))}
-        </div>
-      </section>
-
-      {/* Full grid */}
-      <section>
-        <div className="mb-3 flex items-center gap-2 px-1 text-xs uppercase tracking-widest text-white/40">
-          <Link2 className="h-3.5 w-3.5 text-fuchsia-300" />
-          all services
-        </div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          {PROXY_LINKS.map((p, i) => (
-            <motion.button
-              key={p.name}
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: Math.min(i * 0.03, 0.3), duration: 0.3 }}
-              whileHover={{ y: -3 }}
-              onClick={() => open(p)}
-              className="glass glass-sheen group relative flex items-center gap-3 overflow-hidden rounded-2xl p-3 text-left"
-            >
-              <div
-                className={cn(
-                  'grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br text-white',
-                  p.gradient
-                )}
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-white/8 text-[10px] font-bold text-white/50">
+                {i + 1}
+              </span>
+              <code className="min-w-0 flex-1 truncate text-[11px] text-white/60">
+                {url.replace(/^https?:\/\//, '')}
+              </code>
+              <button
+                onClick={() => copy(url)}
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-white/40 transition-colors hover:bg-white/10 hover:text-white"
+                title="copy link"
               >
-                <span className="text-sm font-black">{p.name[0]}</span>
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold text-white">{p.name}</div>
-                <div className="truncate text-[10px] text-white/45">{p.tagline}</div>
-              </div>
-            </motion.button>
+                {copied === url ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-300" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+              </button>
+              <button
+                onClick={() => open(url)}
+                className="glass-sheen inline-flex shrink-0 items-center gap-1 rounded-lg bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 px-2.5 py-1.5 text-[11px] font-medium text-white transition-transform hover:scale-105 active:scale-95"
+                title="open in viewer"
+              >
+                <ExternalLink className="h-3 w-3" />
+                open
+              </button>
+            </div>
           ))}
         </div>
-      </section>
+      </div>
 
-      {/* Viewer modal */}
+      {/* Viewer modal — portaled to document.body */}
+      {typeof document !== 'undefined' && createPortal(
       <AnimatePresence>
         {active && (
           <motion.div
@@ -158,7 +235,7 @@ export default function LinksPanel() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.25 }}
             className={cn(
-              'fixed inset-0 z-50 flex flex-col bg-[#04020a]/95 backdrop-blur-md',
+              'fixed inset-0 z-[100] flex flex-col bg-[#04020a]/95 backdrop-blur-md',
               fullscreen ? 'p-0' : 'p-3 sm:p-6'
             )}
           >
@@ -170,18 +247,20 @@ export default function LinksPanel() {
             >
               <div
                 className={cn(
-                  'grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br text-white',
-                  active.gradient
+                  'grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br text-sm font-black text-white',
+                  site.gradient
                 )}
               >
-                <span className="text-sm font-black">{active.name[0]}</span>
+                {site.name[0]}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold text-white">{active.name}</div>
-                <div className="truncate text-[10px] text-white/40">{active.tagline}</div>
+                <div className="truncate text-sm font-semibold text-white">{site.name}</div>
+                <div className="truncate text-[10px] text-white/40">
+                  {active.replace(/^https?:\/\//, '')}
+                </div>
               </div>
               <a
-                href={active.search}
+                href={active}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hidden items-center gap-1.5 rounded-xl bg-white/8 px-3 py-2 text-xs font-medium text-white/80 transition-colors hover:bg-white/15 sm:inline-flex"
@@ -196,14 +275,14 @@ export default function LinksPanel() {
                   setLoading(true)
                 }}
                 className="grid h-9 w-9 place-items-center rounded-xl text-white/60 transition-colors hover:bg-white/10 hover:text-white"
-                title="reload (R)"
+                title="reload"
               >
                 <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
               </button>
               <button
                 onClick={() => setFullscreen((v) => !v)}
                 className="grid h-9 w-9 place-items-center rounded-xl text-white/60 transition-colors hover:bg-white/10 hover:text-white"
-                title="fullscreen (F)"
+                title="fullscreen"
               >
                 {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
               </button>
@@ -226,31 +305,24 @@ export default function LinksPanel() {
                 <div className="absolute inset-0 z-10 grid place-items-center bg-[#04020a]">
                   <div className="text-center">
                     <Loader2 className="mx-auto mb-3 h-9 w-9 animate-spin text-fuchsia-300" />
-                    <p className="text-sm text-white/60">routing {active.name}…</p>
+                    <p className="text-sm text-white/60">loading {site.name}…</p>
                   </div>
                 </div>
               )}
               <iframe
                 key={iframeKey}
-                src={`/api/proxy?url=${encodeURIComponent(active.search)}`}
+                src={`/api/proxy?url=${encodeURIComponent(active)}`}
                 onLoad={() => setLoading(false)}
                 className="h-full w-full border-0 bg-white"
                 sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin"
                 referrerPolicy="no-referrer"
-                title={active.name}
+                title={site.name}
               />
             </div>
-
-            {!fullscreen && (
-              <div className="mt-2 flex items-center justify-center gap-4 text-[10px] text-white/30">
-                <span><kbd className="rounded bg-white/10 px-1">Esc</kbd> close</span>
-                <span><kbd className="rounded bg-white/10 px-1">F</kbd> fullscreen</span>
-                <span><kbd className="rounded bg-white/10 px-1">R</kbd> reload</span>
-              </div>
-            )}
           </motion.div>
         )}
       </AnimatePresence>
-    </motion.div>
+      , document.body)}
+    </>
   )
 }
