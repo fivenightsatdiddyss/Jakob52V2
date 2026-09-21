@@ -16,10 +16,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react'
-import BlackHoleBackground from './black-hole-bg'
-import OceanBackground from './ocean-bg'
-import HalloweenBackground from './halloween-bg'
-import { useThemeStore } from './theme-store'
 import SettingsPanel from './panels/settings-panel'
 import AiPanel from './panels/ai-panel'
 import GamesPanel from './panels/games-panel'
@@ -48,7 +44,6 @@ const NAV: { id: Tab; label: string; icon: React.ElementType }[] = [
 export default function MainView() {
   const [tab, setTab] = useState<Tab>('home')
   const [collapsed, setCollapsed] = useState(false)
-  const theme = useThemeStore((s) => s.theme)
 
   return (
     <>
@@ -63,14 +58,8 @@ export default function MainView() {
         transition={{ duration: 0.8, ease: 'easeOut' }}
         className="relative flex min-h-screen w-full"
       >
-        {/* Background — conditionally rendered based on the active theme */}
-        {theme === 'ocean' ? (
-          <OceanBackground />
-        ) : theme === 'halloween' ? (
-          <HalloweenBackground />
-        ) : (
-          <BlackHoleBackground />
-        )}
+        {/* Background is now rendered at the page level (page.tsx) via
+            ThemedBackground so it shows on the calculator gate too. */}
 
         {/* Desktop sidebar (retractable) */}
       <aside

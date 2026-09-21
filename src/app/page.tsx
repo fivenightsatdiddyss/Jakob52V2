@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import CalculatorView from '@/components/jakob/calculator-view'
 import MainView from '@/components/jakob/main-view'
+import ThemedBackground from '@/components/jakob/themed-background'
 
 type View = 'gate' | 'main'
 
@@ -23,6 +24,9 @@ export default function Home() {
 
   return (
     <div className="relative min-h-screen w-full overflow-x-hidden text-white">
+      {/* Themed background — renders on ALL pages (gate + main view) so the
+          selected background shows everywhere, not just the settings page. */}
+      <ThemedBackground />
       <AnimatePresence mode="wait">
         {view === 'gate' ? (
           <CalculatorView key="gate" onUnlock={() => setView('main')} />

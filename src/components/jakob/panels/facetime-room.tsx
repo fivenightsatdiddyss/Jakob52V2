@@ -12,6 +12,9 @@ import {
   Users,
   Loader2,
   Radio,
+  Copy,
+  Check,
+  DoorOpen,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -39,26 +42,49 @@ type Signal = {
 type FacetimeRoomProps = {
   profile: Profile
   sessionId: string
+  /** room id — 'public' for the main #facetime channel, or a 6-char code for private rooms */
+  initialRoom?: string
 }
 
-const POLL_INTERVAL_MS = 1500
+const POLL_INTERVAL_MS = 1200
 const PRESENCE_KEEPALIVE_MS = 8000
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
 ]
 
+/** Generate a random 6-char room code. */
+function generateRoomCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // no confusing chars (0/O, 1/I)
+  let out = ''
+  for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)]
+  return out
+}
+
 /**
- * FacetimeRoom — a public WebRTC video room (mesh topology).
+ * FacetimeRoom — a WebRTC video room (mesh topology).
  *
- * All connected users see + hear each other. No room codes. Signaling
- * (peer discovery + SDP/ICE exchange) goes through /api/facetime with polling;
- * the media itself flows peer-to-peer via WebRTC.
+ * Supports a public room (the #facetime channel) and private rooms (join by
+ * 6-char code). Signaling goes through /api/facetime with polling; media flows
+ * P2P via WebRTC.
  *
- * Mute / camera-off toggle the local tracks (the stream stays connected).
+ * Fixes vs the old version:
+ *  - ICE candidates that arrive before the remote description are BUFFERED and
+ *    applied once setRemoteDescription completes (the old version dropped them,
+ *    which broke connections on mobile/slow networks).
+ *  - Local video uses playsInline + muted + autoplay so it renders on iOS Safari.
+ *  - getUserMedia constraints are mobile-friendly (facingMode: 'user', and a
+ *    fallback to audio-only if video fails).
+ *  - Renegotiation handling: if a peer's connection isn't in the right state
+ *    when a signal arrives, we reset and retry instead of silently failing.
  */
-export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) {
+export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public' }: FacetimeRoomProps) {
+  const [room, setRoom] = useState<string>(initialRoom)
+  const [roomInput, setRoomInput] = useState('')
+  const [showRoomDialog, setShowRoomDialog] = useState(false)
   const [joined, setJoined] = useState(false)
   const [joining, setJoining] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -66,20 +92,23 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
   const [micOn, setMicOn] = useState(true)
   const [camOn, setCamOn] = useState(true)
   const [connected, setConnected] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const localVideoRef = useRef<HTMLVideoElement>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
-  // remote video elements keyed by peer sessionId
   const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map())
-  // RTCPeerConnections keyed by peer sessionId
   const pcRef = useRef<Map<string, RTCPeerConnection>>(new Map())
-  // known peer sessionIds (so we detect new peers)
+  // buffered ICE candidates per peer (applied after setRemoteDescription)
+  const pendingIceRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map())
   const knownPeersRef = useRef<Set<string>>(new Set())
-  // profile ref (so polling callbacks see latest)
   const profileRef = useRef(profile)
+  const roomRef = useRef(room)
   useEffect(() => {
     profileRef.current = profile
   }, [profile])
+  useEffect(() => {
+    roomRef.current = room
+  }, [room])
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const lastPresenceRef = useRef<number>(0)
@@ -91,7 +120,7 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
     void fetch('/api/facetime', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, room: roomRef.current }),
       keepalive: true,
     }).catch(() => {})
   }, [])
@@ -112,14 +141,16 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
   const createPeerConnection = useCallback(
     (peerId: string): RTCPeerConnection => {
       const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
-      // add local tracks
       const stream = localStreamRef.current
       if (stream) {
         for (const track of stream.getTracks()) {
-          pc.addTrack(track, stream)
+          try {
+            pc.addTrack(track, stream)
+          } catch {
+            /* track may already be added */
+          }
         }
       }
-      // ICE candidates → send to the remote peer via signaling
       pc.onicecandidate = (e) => {
         if (e.candidate) {
           postSignal({
@@ -131,7 +162,6 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
           })
         }
       }
-      // remote track → attach to a video element
       pc.ontrack = (e) => {
         const el = remoteVideoRefs.current.get(peerId)
         if (el && e.streams[0]) {
@@ -140,8 +170,7 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
         }
       }
       pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          // best-effort: close + remove; the next poll will rediscover
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
           try {
             pc.close()
           } catch {
@@ -156,6 +185,21 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
     [sessionId, postSignal],
   )
 
+  // ---- apply buffered ICE candidates after setRemoteDescription ----
+  const flushPendingIce = useCallback(async (peerId: string) => {
+    const pc = pcRef.current.get(peerId)
+    const pending = pendingIceRef.current.get(peerId)
+    if (!pc || !pending) return
+    for (const cand of pending) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(cand))
+      } catch {
+        /* ignore */
+      }
+    }
+    pendingIceRef.current.delete(peerId)
+  }, [])
+
   // ---- initiate a connection to a new peer (I'm the initiator) ----
   const initiateConnection = useCallback(
     async (peerId: string) => {
@@ -163,7 +207,7 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
       if (!pc) pc = createPeerConnection(peerId)
       if (pc.signalingState !== 'stable') return
       try {
-        const offer = await pc.createOffer()
+        const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
         await pc.setLocalDescription(offer)
         postSignal({
           op: 'signal',
@@ -183,9 +227,11 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
   const poll = useCallback(async () => {
     if (!mountedRef.current || !joined) return
     try {
-      const res = await fetch(`/api/facetime?sessionId=${encodeURIComponent(sessionId)}`, {
-        cache: 'no-store',
-      })
+      const r = roomRef.current
+      const res = await fetch(
+        `/api/facetime?sessionId=${encodeURIComponent(sessionId)}&room=${encodeURIComponent(r)}`,
+        { cache: 'no-store' },
+      )
       if (!res.ok) throw new Error(`http ${res.status}`)
       const data = (await res.json()) as { peers?: Peer[]; signals?: Signal[] }
       if (!mountedRef.current) return
@@ -194,9 +240,7 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
       const peerList = Array.isArray(data.peers) ? data.peers : []
       setPeers(peerList.filter((p) => p.id !== sessionId))
 
-      // discover new peers + initiate connections
-      // To avoid glare (both sides offering), the peer with the
-      // lexicographically-smaller sessionId initiates.
+      // discover new peers + initiate connections (perfect-negation style)
       for (const p of peerList) {
         if (p.id === sessionId) continue
         if (!knownPeersRef.current.has(p.id)) {
@@ -220,6 +264,7 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
             }
             pcRef.current.delete(id)
           }
+          pendingIceRef.current.delete(id)
         }
       }
 
@@ -229,9 +274,17 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
         const fromId = sig.from
         if (fromId === sessionId) continue
         let pc = pcRef.current.get(fromId)
+
         if (sig.type === 'offer') {
           if (!pc) pc = createPeerConnection(fromId)
-          if (pc.signalingState !== 'stable') continue
+          // If we're not stable (e.g. glare), reset and accept the incoming offer
+          if (pc.signalingState !== 'stable') {
+            try {
+              await pc.setLocalDescription({ type: 'rollback' })
+            } catch {
+              /* ignore */
+            }
+          }
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(sig.data as RTCSessionDescriptionInit))
             const answer = await pc.createAnswer()
@@ -243,6 +296,8 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
               type: 'answer',
               data: answer.toJSON ? answer.toJSON() : answer,
             })
+            // apply any buffered ICE for this peer
+            void flushPendingIce(fromId)
           } catch (err) {
             console.error('answer failed', err)
           }
@@ -251,18 +306,26 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
           if (pc.signalingState !== 'have-local-offer') continue
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(sig.data as RTCSessionDescriptionInit))
+            void flushPendingIce(fromId)
           } catch (err) {
             console.error('set answer failed', err)
           }
         } else if (sig.type === 'ice') {
           if (!pc) {
-            // ICE might arrive before the offer; create the pc so we can buffer
+            // ICE may arrive before the offer; create the pc + buffer
             pc = createPeerConnection(fromId)
           }
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(sig.data as RTCIceCandidateInit))
-          } catch (err) {
-            // candidates can arrive before remote description — ignore
+          if (pc.remoteDescription) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(sig.data as RTCIceCandidateInit))
+            } catch {
+              /* ignore */
+            }
+          } else {
+            // buffer until setRemoteDescription completes
+            const buf = pendingIceRef.current.get(fromId) || []
+            buf.push(sig.data as RTCIceCandidateInit)
+            pendingIceRef.current.set(fromId, buf)
           }
         }
       }
@@ -275,20 +338,31 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
       if (!mountedRef.current) return
       setConnected(false)
     }
-  }, [sessionId, joined, createPeerConnection, postSignal, sendPresence, initiateConnection])
+  }, [sessionId, joined, createPeerConnection, postSignal, sendPresence, initiateConnection, flushPendingIce])
 
   // ---- join: get camera/mic, start polling ----
   const join = useCallback(async () => {
     setJoining(true)
     setError(null)
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: true,
-      })
+      // Mobile-friendly constraints: prefer front camera, fall back to audio-only
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: true,
+        })
+      } catch {
+        // video failed — try audio-only
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        setCamOn(false)
+        toast('camera unavailable', { description: 'joined with audio only' })
+      }
       localStreamRef.current = stream
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream
+        // iOS Safari requires muted + playsInline for autoplay
+        localVideoRef.current.muted = true
         localVideoRef.current.play().catch(() => {})
       }
       setJoined(true)
@@ -310,7 +384,6 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
 
   // ---- leave: stop all tracks, close all PCs, notify server ----
   const leave = useCallback(() => {
-    // close peer connections
     for (const [, pc] of pcRef.current) {
       try {
         pc.close()
@@ -320,45 +393,64 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
     }
     pcRef.current.clear()
     knownPeersRef.current.clear()
-    // stop local tracks
+    pendingIceRef.current.clear()
     const stream = localStreamRef.current
     if (stream) {
       for (const t of stream.getTracks()) t.stop()
       localStreamRef.current = null
     }
     if (localVideoRef.current) localVideoRef.current.srcObject = null
-    // stop polling
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current)
       pollTimerRef.current = null
     }
-    // notify server
     postSignal({ op: 'leave', sessionId })
     setJoined(false)
     setPeers([])
   }, [sessionId, postSignal])
 
-  // ---- toggle mic ----
   const toggleMic = useCallback(() => {
     const stream = localStreamRef.current
     if (!stream) return
     const next = !micOn
-    for (const track of stream.getAudioTracks()) {
-      track.enabled = next
-    }
+    for (const track of stream.getAudioTracks()) track.enabled = next
     setMicOn(next)
   }, [micOn])
 
-  // ---- toggle camera ----
   const toggleCam = useCallback(() => {
     const stream = localStreamRef.current
     if (!stream) return
     const next = !camOn
-    for (const track of stream.getVideoTracks()) {
-      track.enabled = next
-    }
+    for (const track of stream.getVideoTracks()) track.enabled = next
     setCamOn(next)
   }, [camOn])
+
+  // ---- create / join a private room ----
+  const createPrivateRoom = useCallback(() => {
+    const code = generateRoomCode()
+    setRoom(code)
+    setShowRoomDialog(false)
+    toast.success('private room created', { description: `code: ${code}` })
+  }, [])
+
+  const joinPrivateRoom = useCallback(() => {
+    const code = roomInput.trim().toUpperCase()
+    if (code.length < 4) {
+      toast.error('invalid code', { description: 'enter at least 4 characters' })
+      return
+    }
+    setRoom(code)
+    setShowRoomDialog(false)
+    toast.success(`joining room ${code}`)
+  }, [roomInput])
+
+  const copyRoomCode = useCallback(() => {
+    navigator.clipboard?.writeText(room).then(() => {
+      setCopied(true)
+      toast.success('room code copied')
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }, [room])
 
   // ---- cleanup on unmount ----
   useEffect(() => {
@@ -375,9 +467,7 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
       }
       pcRef.current.clear()
       const stream = localStreamRef.current
-      if (stream) {
-        for (const t of stream.getTracks()) t.stop()
-      }
+      if (stream) for (const t of stream.getTracks()) t.stop()
       postSignal({ op: 'leave', sessionId })
     }
   }, [sessionId, postSignal])
@@ -396,9 +486,35 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
         <div>
           <h3 className="text-xl font-semibold text-white">facetime</h3>
           <p className="mt-1 max-w-sm text-sm text-white/50">
-            a public video room. enable your camera + mic to talk with anyone here. no codes, no rooms — everyone in this channel sees + hears each other.
+            {room === 'public'
+              ? 'the public video room. enable your camera + mic to talk with anyone here.'
+              : `private room ${room}. share the code so others can join.`}
           </p>
         </div>
+
+        {/* Room switcher */}
+        <div className="flex items-center gap-2 text-xs text-white/50">
+          {room === 'public' ? (
+            <span className="rounded-full bg-white/8 px-3 py-1">public room</span>
+          ) : (
+            <button
+              onClick={copyRoomCode}
+              className="inline-flex items-center gap-1.5 rounded-full bg-fuchsia-500/15 px-3 py-1 text-fuchsia-200 ring-1 ring-inset ring-fuchsia-400/30"
+              title="copy code"
+            >
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              room {room}
+            </button>
+          )}
+          <button
+            onClick={() => setShowRoomDialog(true)}
+            className="inline-flex items-center gap-1 rounded-full glass-subtle px-3 py-1 text-white/70 transition-colors hover:bg-white/15 hover:text-white"
+          >
+            <DoorOpen className="h-3 w-3" />
+            {room === 'public' ? 'private room' : 'switch room'}
+          </button>
+        </div>
+
         {error && (
           <div className="max-w-sm rounded-2xl bg-rose-500/15 px-4 py-3 text-sm text-rose-200">
             {error}
@@ -409,16 +525,71 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
           disabled={joining}
           className="glass-sheen inline-flex items-center gap-2 rounded-2xl bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 px-6 py-3 text-sm font-medium text-white transition-transform hover:scale-105 active:scale-95 disabled:opacity-60"
         >
-          {joining ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Phone className="h-4 w-4" />
-          )}
+          {joining ? <Loader2 className="h-4 w-4 animate-spin" /> : <Phone className="h-4 w-4" />}
           {joining ? 'joining…' : 'join with camera + mic'}
         </button>
         <p className="text-[11px] text-white/30">
           you'll be asked to allow camera + microphone access
         </p>
+
+        {/* Room dialog */}
+        <AnimatePresence>
+          {showRoomDialog && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
+              onClick={() => setShowRoomDialog(false)}
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-sm rounded-3xl glass-strong glass-sheen p-6"
+              >
+                <h3 className="text-lg font-semibold text-white">video rooms</h3>
+                <p className="mt-1 text-xs text-white/50">
+                  create a private room (get a code) or join one with a code.
+                </p>
+                <div className="mt-4 space-y-3">
+                  <button
+                    onClick={createPrivateRoom}
+                    className="glass-sheen flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 px-4 py-3 text-sm font-medium text-white transition-transform hover:scale-[1.02] active:scale-95"
+                  >
+                    <DoorOpen className="h-4 w-4" />
+                    create private room
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={roomInput}
+                      onChange={(e) => setRoomInput(e.target.value.toUpperCase())}
+                      placeholder="ROOM CODE"
+                      maxLength={8}
+                      className="glass-subtle flex-1 rounded-xl border border-white/10 bg-transparent px-3 py-2.5 text-sm uppercase tracking-widest text-white placeholder:text-white/35 focus:border-fuchsia-400/40 focus:outline-none"
+                    />
+                    <button
+                      onClick={joinPrivateRoom}
+                      className="glass-sheen rounded-xl bg-white/8 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-white/15"
+                    >
+                      join
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setRoom('public')
+                      setShowRoomDialog(false)
+                    }}
+                    className="w-full rounded-xl px-4 py-2 text-xs text-white/50 transition-colors hover:bg-white/8 hover:text-white"
+                  >
+                    use public room
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     )
   }
@@ -434,7 +605,9 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
         <Video className="h-5 w-5 text-fuchsia-300" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-white">facetime</span>
+            <span className="text-sm font-semibold text-white">
+              {room === 'public' ? 'facetime' : `room ${room}`}
+            </span>
             <span
               className={cn(
                 'inline-flex items-center gap-1 text-[10px]',
@@ -455,6 +628,17 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
             {totalInRoom} {totalInRoom === 1 ? 'person' : 'people'} in the room
           </p>
         </div>
+        {/* copy room code (private rooms) */}
+        {room !== 'public' && (
+          <button
+            onClick={copyRoomCode}
+            className="inline-flex items-center gap-1.5 rounded-xl glass-subtle px-2.5 py-1.5 text-[11px] text-fuchsia-200 transition-colors hover:bg-white/15"
+            title="copy room code"
+          >
+            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            {room}
+          </button>
+        )}
       </div>
 
       {/* video grid */}
@@ -468,7 +652,6 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
             totalInRoom >= 5 && 'grid-cols-2 lg:grid-cols-3',
           )}
         >
-          {/* local video */}
           <VideoTile
             label={`${profile.name} (you)`}
             colorClass={profile.color}
@@ -477,7 +660,6 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
             camOn={camOn}
             isLocal
           />
-          {/* remote videos */}
           <AnimatePresence mode="popLayout">
             {peers.map((p) => (
               <motion.div
@@ -503,7 +685,9 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
 
         {peerCount === 0 && (
           <div className="mt-6 text-center text-sm text-white/40">
-            you're the only one here. share this page — others who open facetime will join automatically.
+            {room === 'public'
+              ? "you're the only one here. share this page — others who open facetime will join automatically."
+              : `share the room code ${room} so others can join.`}
           </div>
         )}
       </div>
@@ -515,9 +699,7 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
           title={micOn ? 'mute' : 'unmute'}
           className={cn(
             'grid h-12 w-12 place-items-center rounded-2xl transition-all',
-            micOn
-              ? 'glass-subtle text-white hover:bg-white/15'
-              : 'bg-rose-500/30 text-rose-200 hover:bg-rose-500/40',
+            micOn ? 'glass-subtle text-white hover:bg-white/15' : 'bg-rose-500/30 text-rose-200 hover:bg-rose-500/40',
           )}
         >
           {micOn ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
@@ -527,9 +709,7 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
           title={camOn ? 'stop camera' : 'start camera'}
           className={cn(
             'grid h-12 w-12 place-items-center rounded-2xl transition-all',
-            camOn
-              ? 'glass-subtle text-white hover:bg-white/15'
-              : 'bg-rose-500/30 text-rose-200 hover:bg-rose-500/40',
+            camOn ? 'glass-subtle text-white hover:bg-white/15' : 'bg-rose-500/30 text-rose-200 hover:bg-rose-500/40',
           )}
         >
           {camOn ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
@@ -546,7 +726,6 @@ export default function FacetimeRoom({ profile, sessionId }: FacetimeRoomProps) 
   )
 }
 
-/** A single video tile (local or remote). */
 function VideoTile({
   label,
   colorClass,
@@ -573,14 +752,10 @@ function VideoTile({
         muted={isLocal}
         className={cn('h-full w-full object-cover', mirrored && 'scale-x-[-1]')}
       />
-      {/* label */}
       <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/60 px-2 py-1 backdrop-blur-sm">
         <span className={cn('text-xs font-semibold', colorClass)}>{label}</span>
-        {isLocal && !camOn && (
-          <VideoOff className="h-3 w-3 text-rose-300" />
-        )}
+        {isLocal && !camOn && <VideoOff className="h-3 w-3 text-rose-300" />}
       </div>
-      {/* placeholder when no video */}
       {isLocal && !camOn && (
         <div className="absolute inset-0 grid place-items-center bg-gradient-to-br from-violet-900/40 to-fuchsia-900/30">
           <VideoOff className="h-8 w-8 text-white/30" />

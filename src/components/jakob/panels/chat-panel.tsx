@@ -19,6 +19,8 @@ import {
   Video,
   CornerUpLeft,
   SmilePlus,
+  Plus,
+  Lock,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -300,6 +302,13 @@ export default function ChatPanel() {
   useEffect(() => {
     activeChannelRef.current = activeChannel
   }, [activeChannel])
+
+  // private channels (text rooms joined by code) — persisted per-session
+  const [privateRooms, setPrivateRooms] = useState<string[]>([])
+  const [showRoomDialog, setShowRoomDialog] = useState(false)
+  const [roomInput, setRoomInput] = useState('')
+  // private facetime room (null = public)
+  const [facetimeRoom, setFacetimeRoom] = useState<string>('public')
 
   // reply state — when set, shows a preview bar + sends with replyTo
   const [replyingTo, setReplyingTo] = useState<ChatMsg | null>(null)
@@ -635,6 +644,39 @@ export default function ChatPanel() {
     setReactPickerFor(null)
   }
 
+  // ---- private chat room helpers ----
+  const generateRoomCode = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    let out = ''
+    for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)]
+    return out
+  }
+  const createPrivateRoom = () => {
+    const code = generateRoomCode()
+    setPrivateRooms((r) => [...r, code])
+    setActiveChannel(code)
+    setMessages([])
+    lastMessageTimeRef.current = ''
+    setTypingUser(null)
+    setShowRoomDialog(false)
+    toast.success('private room created', { description: `code: ${code}` })
+  }
+  const joinPrivateRoom = () => {
+    const code = roomInput.trim().toUpperCase()
+    if (code.length < 4) {
+      toast.error('invalid code', { description: 'enter at least 4 characters' })
+      return
+    }
+    setPrivateRooms((r) => (r.includes(code) ? r : [...r, code]))
+    setActiveChannel(code)
+    setMessages([])
+    lastMessageTimeRef.current = ''
+    setTypingUser(null)
+    setShowRoomDialog(false)
+    setRoomInput('')
+    toast.success(`joining room ${code}`)
+  }
+
   const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInput(e.target.value)
     const p = profileRef.current
@@ -716,6 +758,43 @@ export default function ChatPanel() {
             )
           })}
 
+          {/* Private rooms section */}
+          <div className="mt-3">
+            <div className="mb-1.5 flex items-center justify-between px-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-white/40">
+                private rooms
+              </span>
+              <button
+                onClick={() => setShowRoomDialog(true)}
+                className="grid h-5 w-5 place-items-center rounded-md text-white/40 transition-colors hover:bg-white/10 hover:text-white"
+                title="create / join a private room"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {privateRooms.map((code) => (
+              <button
+                key={code}
+                onClick={() => {
+                  if (activeChannel === code) return
+                  setActiveChannel(code)
+                  setMessages([])
+                  lastMessageTimeRef.current = ''
+                  setTypingUser(null)
+                }}
+                className={cn(
+                  'group mb-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors',
+                  activeChannel === code
+                    ? 'bg-gradient-to-br from-fuchsia-500/25 to-violet-500/15 text-white ring-1 ring-inset ring-fuchsia-400/30'
+                    : 'text-white/60 hover:bg-white/8 hover:text-white',
+                )}
+              >
+                <Lock className="h-4 w-4 shrink-0 text-amber-300" />
+                <span className="flex-1 truncate">{code}</span>
+              </button>
+            ))}
+          </div>
+
           {/* Online roster */}
           <div className="mt-3 px-2">
             <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[10px] font-bold uppercase tracking-wider text-white/40">
@@ -788,6 +867,7 @@ export default function ChatPanel() {
           <FacetimeRoom
             profile={profile}
             sessionId={sessionIdRef.current}
+            initialRoom={facetimeRoom}
           />
         ) : (
         <>
@@ -1218,6 +1298,67 @@ export default function ChatPanel() {
                   className="flex-1 rounded-xl bg-gradient-to-br from-fuchsia-500/70 to-violet-600/70 px-4 py-2 text-sm font-semibold text-white transition-transform hover:scale-[1.02] active:scale-95"
                 >
                   Save
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {/* Private room dialog (create / join) */}
+      <AnimatePresence>
+        {showRoomDialog ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4"
+            onClick={() => setShowRoomDialog(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-3xl glass-strong glass-sheen p-6"
+            >
+              <h3 className="text-lg font-semibold text-white">private rooms</h3>
+              <p className="mt-1 text-xs text-white/50">
+                create a private chat room (get a code) or join one with a code.
+              </p>
+              <div className="mt-4 space-y-3">
+                <button
+                  onClick={createPrivateRoom}
+                  className="glass-sheen flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 px-4 py-3 text-sm font-medium text-white transition-transform hover:scale-[1.02] active:scale-95"
+                >
+                  <Plus className="h-4 w-4" />
+                  create private chat room
+                </button>
+                <div className="flex items-center gap-2">
+                  <input
+                    value={roomInput}
+                    onChange={(e) => setRoomInput(e.target.value.toUpperCase())}
+                    placeholder="ROOM CODE"
+                    maxLength={8}
+                    className="glass-subtle flex-1 rounded-xl border border-white/10 bg-transparent px-3 py-2.5 text-sm uppercase tracking-widest text-white placeholder:text-white/35 focus:border-fuchsia-400/40 focus:outline-none"
+                  />
+                  <button
+                    onClick={joinPrivateRoom}
+                    className="glass-sheen rounded-xl bg-white/8 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-white/15"
+                  >
+                    join
+                  </button>
+                </div>
+                <button
+                  onClick={() => {
+                    setFacetimeRoom('public')
+                    setActiveChannel('facetime')
+                    setShowRoomDialog(false)
+                  }}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-white/8 px-4 py-2.5 text-sm text-white/80 transition-colors hover:bg-white/15"
+                >
+                  <Video className="h-4 w-4" />
+                  public facetime
                 </button>
               </div>
             </motion.div>

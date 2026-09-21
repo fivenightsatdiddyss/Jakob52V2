@@ -199,28 +199,8 @@ export default function CalculatorView({ onUnlock }: Props) {
       exit={{ opacity: 0, scale: 1.08, filter: 'blur(8px)' }}
       transition={{ duration: 0.7, ease: 'easeInOut' }}
     >
-      {/* Ambient cosmic backdrop for the gate */}
-      <div className="pointer-events-none fixed inset-0 -z-10">
-        <div
-          className="absolute inset-0"
-          style={{
-            background:
-              'radial-gradient(circle at 50% 35%, #1a0b2e 0%, #0a0518 45%, #04020a 100%)',
-          }}
-        />
-        <div
-          className="absolute inset-0 opacity-60"
-          style={{
-            backgroundImage:
-              'radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.7), transparent), radial-gradient(1px 1px at 70% 60%, rgba(200,180,255,0.6), transparent), radial-gradient(1.5px 1.5px at 40% 80%, rgba(255,255,255,0.5), transparent), radial-gradient(1px 1px at 85% 20%, rgba(255,220,180,0.6), transparent), radial-gradient(1px 1px at 10% 70%, rgba(180,200,255,0.5), transparent)',
-            backgroundSize: '600px 600px',
-          }}
-        />
-        <div
-          className="absolute left-1/2 top-1/2 h-[60vmin] w-[60vmin] -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
-          style={{ background: 'radial-gradient(circle, rgba(120,40,160,0.25), transparent 70%)' }}
-        />
-      </div>
+      {/* The themed background is now rendered globally at the page level
+          (page.tsx → ThemedBackground) so it shows on the calculator gate too. */}
 
       {/* Calculator only — no title */}
       <motion.div
