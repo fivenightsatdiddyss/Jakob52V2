@@ -314,3 +314,21 @@ Stage Summary:
   7. Close tab 2 → tab 1's pill drops to "● 1 online" within ~15s (presence TTL) and bob disappears from the roster.
   8. Upload an image as avatar in tab 1 → it's downscaled to ≤400 chars and appears on tab 2's roster + on every message tab 1 sends.
   9. To verify Netlify deployment: push to the repo, Netlify builds, the `/api/chat` route deploys as a serverless function automatically (no extra config — `@netlify/plugin-nextjs` is already in devDependencies and `netlify.toml` is configured). On Netlify, `process.env.NETLIFY` is set so the Blobs path is used; presence/messages persist across function invocations and across users.
+
+---
+Task ID: 1,2 (orchestrator)
+Agent: main (Z.ai Code)
+Task: Self-contained proxy + in-browser AI (WebLLM)
+
+Work Log:
+- Proxy: rewrote /api/proxy/route.ts to fetch directly (no corsproxy.io middleman). The function now: (1) fetches the target URL server-side with a realistic User-Agent, (2) for HTML responses strips X-Frame-Options/CSP and rewrites all resource URLs (src, href, srcset, data-src, etc.) + CSS url() to route back through /api/proxy, (3) for CSS responses rewrites url() references, (4) for other resources (images/scripts/fonts) passes the body through with the original Content-Type. Uses res.url (final URL after redirects) as the base for relative resolution. Removed the CORSPROXY_KEY env var dependency. Verified: example.com loads through the proxy on the gateway.
+- AI: integrated @mlc-ai/web-llm. The AI panel now shows a model-load gate with two options (Llama 3.2 1B ~700MB, Qwen 2.5 0.5B ~400MB). On load, a progress bar shows download progress. Once loaded, the model runs entirely in-browser via WebGPU — real answers, streamed token-by-token. Uses CreateMLCEngine (main thread) instead of CreateWebWorkerMLCEngine (Turbopack can't bundle the worker URL from node_modules — "Worker loader could not be created" error). Streaming keeps the UI responsive between tokens. System prompt fits the jakob-52 theme. WebGPU detection with fallback message for unsupported browsers. No server, no API, no 3rd party.
+- Chat (delegated to subagent): replaced socket.io with /api/chat (Netlify serverless + Netlify Blobs, 1.5s polling, in-memory fallback for local dev). All profile/avatar/roster features preserved. Removed socket.io-client dependency.
+- Updated README + UI text to reflect the self-contained architecture (no corsproxy, no chat-service needed).
+- Cleaned up corsproxy references in proxy-panel.tsx and app-shortcuts.tsx.
+- Committed and pushed to GitHub (Jakob52V2).
+
+Stage Summary:
+- Files changed: src/app/api/proxy/route.ts (rewritten), src/components/jakob/panels/ai-panel.tsx (rewritten with WebLLM), src/components/jakob/panels/chat-panel.tsx (by subagent), src/app/api/chat/route.ts (new, by subagent), src/components/jakob/panels/proxy-panel.tsx (UI text), src/components/jakob/app-shortcuts.tsx (UI text), README.md, package.json (added @mlc-ai/web-llm + @netlify/blobs, removed socket.io-client).
+- `bun run lint` passes (0 errors). All browser-verified through the gateway on :81.
+- The proxy and chat now work on Netlify. The AI works in any WebGPU-capable browser (Chrome/Edge).
