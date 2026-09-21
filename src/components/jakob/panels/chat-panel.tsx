@@ -21,10 +21,12 @@ import {
   SmilePlus,
   Plus,
   Lock,
+  Mic,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import FacetimeRoom from './facetime-room'
+import VoicechatRoom from './voicechat-room'
 
 type ChatMsg = {
   id: string
@@ -67,6 +69,7 @@ type PollResponse = {
 const CHANNELS = [
   { id: 'general', name: 'general', topic: 'the live relay — open to all drifters', live: true, kind: 'text' as const },
   { id: 'random', name: 'random', topic: 'off-topic chaos', live: true, kind: 'text' as const },
+  { id: 'voicechat', name: 'voicechat', topic: 'public audio room — talk with your voice', live: true, kind: 'voice' as const },
   { id: 'facetime', name: 'facetime', topic: 'public video room — camera + mic', live: true, kind: 'video' as const },
 ]
 
@@ -107,7 +110,7 @@ const EMOJIS = [
 
 const LS_KEY = 'jakob52-chat-profile'
 const SESSION_KEY = 'jakob52-chat-session'
-const AVATAR_MAX = 400
+const AVATAR_MAX = 10000 // chars — enough for a 64x64 JPEG data URL
 const POLL_INTERVAL_MS = 1500
 const PRESENCE_KEEPALIVE_MS = 10_000
 const TYPING_THROTTLE_MS = 1000
@@ -207,8 +210,12 @@ function Avatar({
           className,
         )}
       >
-        <span className="leading-none">
-          {size === 'lg' ? 'text-2xl' : size === 'sm' ? 'text-base' : 'text-lg'}
+        <span
+          className={cn(
+            'leading-none',
+            size === 'lg' ? 'text-2xl' : size === 'sm' ? 'text-base' : 'text-lg',
+          )}
+        >
           {avatar}
         </span>
       </div>
@@ -246,8 +253,8 @@ const downscaleToDataUrl = (file: File): Promise<string> =>
         const minDim = Math.min(img.width, img.height) || 1
         const sx = (img.width - minDim) / 2
         const sy = (img.height - minDim) / 2
-        const sizes = [64, 48, 40, 32, 28, 24]
-        const qualities = [0.7, 0.5, 0.35, 0.25]
+        const sizes = [96, 72, 56, 48]
+        const qualities = [0.8, 0.6, 0.4]
         for (const size of sizes) {
           for (const q of qualities) {
             const canvas = document.createElement('canvas')
@@ -744,6 +751,8 @@ export default function ChatPanel() {
             >
               {r.kind === 'video' ? (
                 <Video className="h-4 w-4 shrink-0 text-fuchsia-300" />
+              ) : r.kind === 'voice' ? (
+                <Mic className="h-4 w-4 shrink-0 text-emerald-300" />
               ) : (
                 <Hash className="h-4 w-4 shrink-0 text-white/40" />
               )}
@@ -861,13 +870,18 @@ export default function ChatPanel() {
         </div>
       </aside>
 
-      {/* Conversation (text channels) OR FacetimeRoom (video channel) */}
+      {/* Conversation (text channels) OR FacetimeRoom (video) OR VoicechatRoom (audio) */}
       <div className="flex min-w-0 flex-1 flex-col">
         {activeChannel === 'facetime' ? (
           <FacetimeRoom
             profile={profile}
             sessionId={sessionIdRef.current}
             initialRoom={facetimeRoom}
+          />
+        ) : activeChannel === 'voicechat' ? (
+          <VoicechatRoom
+            profile={profile}
+            sessionId={sessionIdRef.current}
           />
         ) : (
         <>

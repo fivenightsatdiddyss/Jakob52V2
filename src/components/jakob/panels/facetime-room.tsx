@@ -49,11 +49,29 @@ type FacetimeRoomProps = {
 const POLL_INTERVAL_MS = 1200
 const PRESENCE_KEEPALIVE_MS = 8000
 const ICE_SERVERS: RTCIceServer[] = [
+  // Google STUN servers (NAT discovery)
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
   { urls: 'stun:stun3.l.google.com:19302' },
   { urls: 'stun:stun4.l.google.com:19302' },
+  // OpenRelay free TURN servers (relay for strict NATs / firewalls — critical
+  // for connections where STUN alone fails, e.g. school/corporate networks)
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
 ]
 
 /** Generate a random 6-char room code. */
@@ -89,6 +107,7 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
   const [joining, setJoining] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [peers, setPeers] = useState<Peer[]>([])
+  const [peerStates, setPeerStates] = useState<Record<string, string>>({})
   const [micOn, setMicOn] = useState(true)
   const [camOn, setCamOn] = useState(true)
   const [connected, setConnected] = useState(false)
@@ -169,7 +188,20 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
           el.play().catch(() => {})
         }
       }
+      pc.oniceconnectionstatechange = () => {
+        const state = pc.iceConnectionState
+        setPeerStates((prev) => ({ ...prev, [peerId]: state }))
+        if (state === 'failed' || state === 'disconnected') {
+          // try to restart ICE
+          try {
+            pc.restartIce()
+          } catch {
+            /* ignore */
+          }
+        }
+      }
       pc.onconnectionstatechange = () => {
+        setPeerStates((prev) => ({ ...prev, [peerId]: pc.connectionState }))
         if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
           try {
             pc.close()
@@ -673,6 +705,8 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
                 <VideoTile
                   label={p.user}
                   colorClass={p.color}
+                  avatar={p.avatar}
+                  connectionState={peerStates[p.id] || 'new'}
                   videoRefCallback={(el) => {
                     if (el) remoteVideoRefs.current.set(p.id, el)
                     else remoteVideoRefs.current.delete(p.id)
@@ -734,6 +768,8 @@ function VideoTile({
   mirrored,
   camOn,
   isLocal,
+  avatar,
+  connectionState,
 }: {
   label: string
   colorClass: string
@@ -742,7 +778,16 @@ function VideoTile({
   mirrored?: boolean
   camOn?: boolean
   isLocal?: boolean
+  avatar?: string
+  connectionState?: string
 }) {
+  const isLive = connectionState === 'connected' || connectionState === 'completed'
+  const isConnecting =
+    !isLocal &&
+    !isLive &&
+    connectionState !== 'failed' &&
+    connectionState !== 'closed'
+
   return (
     <div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-black/40">
       <video
@@ -752,9 +797,43 @@ function VideoTile({
         muted={isLocal}
         className={cn('h-full w-full object-cover', mirrored && 'scale-x-[-1]')}
       />
+      {/* Connecting overlay — shows avatar + status while the peer connection establishes */}
+      {isConnecting && (
+        <div className="absolute inset-0 grid place-items-center bg-gradient-to-br from-violet-900/40 to-fuchsia-900/30">
+          <div className="flex flex-col items-center gap-2">
+            <div className="grid h-14 w-14 place-items-center overflow-hidden rounded-full bg-white/10 ring-1 ring-white/15">
+              {avatar && avatar.startsWith('data:') ? (
+                <img src={avatar} alt="" className="h-full w-full object-cover" />
+              ) : avatar && avatar.length <= 4 && avatar.length > 0 ? (
+                <span className="text-2xl">{avatar}</span>
+              ) : (
+                <span className={cn('text-lg font-bold', colorClass)}>
+                  {label.slice(0, 2).toUpperCase()}
+                </span>
+              )}
+            </div>
+            <span className="text-[11px] text-white/50">
+              {connectionState === 'new' || !connectionState
+                ? 'waiting…'
+                : connectionState === 'checking'
+                  ? 'connecting…'
+                  : connectionState}
+            </span>
+          </div>
+        </div>
+      )}
+      {/* Failed overlay */}
+      {connectionState === 'failed' && (
+        <div className="absolute inset-0 grid place-items-center bg-rose-950/40">
+          <span className="text-xs text-rose-300">connection failed · retrying…</span>
+        </div>
+      )}
       <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/60 px-2 py-1 backdrop-blur-sm">
         <span className={cn('text-xs font-semibold', colorClass)}>{label}</span>
         {isLocal && !camOn && <VideoOff className="h-3 w-3 text-rose-300" />}
+        {!isLocal && isLive && (
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.6)]" />
+        )}
       </div>
       {isLocal && !camOn && (
         <div className="absolute inset-0 grid place-items-center bg-gradient-to-br from-violet-900/40 to-fuchsia-900/30">

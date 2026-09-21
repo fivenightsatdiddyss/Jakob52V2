@@ -10,14 +10,14 @@ const PAGE_SIZE = 48
 
 // deterministic gradient per movie so cards feel distinct without posters
 const GRADIENTS = [
-  'from-violet-600/40 to-fuchsia-600/30',
-  'from-fuchsia-600/40 to-rose-600/30',
-  'from-sky-600/40 to-indigo-600/30',
-  'from-emerald-600/40 to-teal-600/30',
-  'from-amber-600/40 to-orange-600/30',
-  'from-rose-600/40 to-pink-600/30',
-  'from-indigo-600/40 to-violet-600/30',
-  'from-cyan-600/40 to-blue-600/30',
+  'from-violet-500 to-fuchsia-600',
+  'from-fuchsia-500 to-rose-600',
+  'from-sky-500 to-indigo-600',
+  'from-emerald-500 to-teal-600',
+  'from-amber-500 to-orange-600',
+  'from-rose-500 to-pink-600',
+  'from-indigo-500 to-violet-600',
+  'from-cyan-500 to-blue-600',
 ]
 
 export default function MoviesPanel() {
@@ -143,29 +143,36 @@ export default function MoviesPanel() {
                 onClick={() => openMovie(m)}
                 className="glass glass-sheen group relative aspect-[2/3] overflow-hidden rounded-2xl text-left"
               >
-                {/* Gradient backdrop (also the fallback when no poster) */}
+                {/* Gradient backdrop (always present — the poster sits on top) */}
                 <div
                   className={cn(
-                    'absolute inset-0 bg-gradient-to-br opacity-90 transition-opacity group-hover:opacity-100',
+                    'absolute inset-0 bg-gradient-to-br opacity-95 transition-opacity group-hover:opacity-100',
                     GRADIENTS[i % GRADIENTS.length]
                   )}
                 />
+                {/* Movie name centered — shows when the poster fails to load (the
+                    poster img, if it loads, covers this) */}
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-3 text-center">
+                  <Clapperboard className="h-8 w-8 text-white/20" />
+                  <span className="text-sm font-bold leading-tight text-white/40">
+                    {m.name}
+                  </span>
+                </div>
                 {/* Real movie poster when available */}
                 {m.poster ? (
                   <img
                     src={m.poster}
                     alt={m.name}
                     loading="lazy"
+                    referrerPolicy="no-referrer"
                     className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                     onError={(e) => {
-                      // hide broken poster → gradient + clapperboard fallback shows
+                      // hide broken poster → gradient + movie name fallback shows
                       ;(e.currentTarget as HTMLImageElement).style.display = 'none'
                     }}
                   />
-                ) : (
-                  <Clapperboard className="absolute left-1/2 top-1/2 h-10 w-10 -translate-x-1/2 -translate-y-1/2 text-white/25" />
-                )}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/15 to-transparent" />
+                ) : null}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
                 <Clapperboard className="absolute left-2.5 top-2.5 h-4 w-4 text-white/40 drop-shadow" />
                 <div className="absolute inset-x-0 bottom-0 p-2.5">
                   <h3 className="line-clamp-3 text-xs font-semibold leading-tight text-white">
