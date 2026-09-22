@@ -11,27 +11,31 @@
  */
 
 export const ICE_SERVERS: RTCIceServer[] = [
-  // Google STUN servers (NAT discovery) — very reliable
+  // Metered STUN
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  // Google STUN (backup)
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
-  { urls: 'stun:stun3.l.google.com:19302' },
-  { urls: 'stun:stun4.l.google.com:19302' },
-  // OpenRelay free TURN servers (relay for strict NATs/firewalls)
+  // Metered TURN (relay — this is what makes connections work behind firewalls)
   {
-    urls: 'turn:openrelay.metered.ca:80',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
+    urls: 'turn:global.relay.metered.ca:80',
+    username: '0061e8c46f003a057211190c',
+    credential: 'tztJo1nb3m+DaCb8',
   },
   {
-    urls: 'turn:openrelay.metered.ca:443',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
+    urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+    username: '0061e8c46f003a057211190c',
+    credential: 'tztJo1nb3m+DaCb8',
   },
   {
-    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
+    urls: 'turn:global.relay.metered.ca:443',
+    username: '0061e8c46f003a057211190c',
+    credential: 'tztJo1nb3m+DaCb8',
+  },
+  {
+    urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+    username: '0061e8c46f003a057211190c',
+    credential: 'tztJo1nb3m+DaCb8',
   },
 ]
 
