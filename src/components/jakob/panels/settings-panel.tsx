@@ -42,12 +42,12 @@ function openAboutBlankCloak() {
   const url = `${window.location.origin}${window.location.pathname}#enter`
 
   // Inner loader document: fills the window and mounts the real app.
-  const loader = `<!DOCTYPE html><html><head><meta charset="utf-8"><title></title><style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#04020a}iframe{border:0;width:100vw;height:100vh;display:block}</style></head><body><iframe src="${url}" allow="autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; gamepad; popups" allowfullscreen></iframe></body></html>`
+  const loader = `<!DOCTYPE html><html><head><meta charset="utf-8"><title></title><style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#04020a}iframe{border:0;width:100vw;height:100vh;display:block}</style></head><body><iframe src="${url}" allow="autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; gamepad; popups; camera; microphone" allow="autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; gamepad; popups; camera; microphone" allowfullscreen></iframe></body></html>`
 
   // Escape the loader so it can live safely inside an srcdoc="..." attribute.
   const srcdoc = loader.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
 
-  const outer = `<!DOCTYPE html><html><head><title></title><style>html,body{margin:0;padding:0;height:100%;background:#04020a}iframe{border:0;width:100vw;height:100vh;display:block}</style></head><body><iframe srcdoc="${srcdoc}" allow="autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; gamepad; popups" allowfullscreen></iframe></body></html>`
+  const outer = `<!DOCTYPE html><html><head><title></title><style>html,body{margin:0;padding:0;height:100%;background:#04020a}iframe{border:0;width:100vw;height:100vh;display:block}</style></head><body><iframe srcdoc="${srcdoc}" allow="autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; gamepad; popups; camera; microphone" allowfullscreen></iframe></body></html>`
 
   const win = window.open('about:blank', '_blank')
   if (!win) {
@@ -84,7 +84,7 @@ function openBlobCloak() {
   const url = `${window.location.origin}${window.location.pathname}#enter`
 
   // Build a self-contained HTML document that loads the real app in an iframe
-  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title></title><style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#04020a}iframe{border:0;width:100vw;height:100vh;display:block}</style></head><body><iframe src="${url}" allow="autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; gamepad; popups" allowfullscreen></iframe></body></html>`
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title></title><style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#04020a}iframe{border:0;width:100vw;height:100vh;display:block}</style></head><body><iframe src="${url}" allow="autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; gamepad; popups; camera; microphone" allowfullscreen></iframe></body></html>`
 
   try {
     const blob = new Blob([doc], { type: 'text/html' })

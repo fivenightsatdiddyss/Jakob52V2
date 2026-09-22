@@ -287,20 +287,12 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
         toast('camera unavailable', { description: 'joined with audio only' })
       }
       localStreamRef.current = stream
-      // Set the stream on the video element IMMEDIATELY and force play
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream
-        localVideoRef.current.muted = true
-        // Force play with a user gesture (join button click)
-        localVideoRef.current.play().then(() => {
-          // video is playing
-        }).catch((err) => {
-          console.error('local video play failed:', err)
-        })
-      }
+      // IMPORTANT: set joined=true FIRST so the video element renders,
+      // THEN attach the stream in a useEffect (the video ref isn't available
+      // until after the joined view renders).
       setJoined(true)
       mountedRef.current = true
-      // Fetch TURN credentials
+      // Fetch TURN credentials (async, non-blocking)
       getIceServers().then((servers) => { iceServersRef.current = servers }).catch(() => {})
       sendPresence()
       void poll()
@@ -314,6 +306,20 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
       setJoining(false)
     }
   }, [sendPresence, poll])
+
+  // Attach the local stream to the video element once it's rendered.
+  // This runs after setJoined(true) causes the video element to mount.
+  // Without this, the stream is captured but never displayed (black screen).
+  useEffect(() => {
+    if (!joined) return
+    const stream = localStreamRef.current
+    const el = localVideoRef.current
+    if (stream && el) {
+      el.srcObject = stream
+      el.muted = true
+      el.play().catch((err) => console.error('local video play failed:', err))
+    }
+  }, [joined])
 
   const leave = useCallback(() => {
     for (const [, pc] of pcRef.current) { try { pc.close() } catch {} }
