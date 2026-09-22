@@ -24,6 +24,7 @@ const TALK_THRESHOLD = 0.08
  */
 export default function VoicechatRoom({ profile, sessionId }: VoicechatRoomProps) {
   const [joined, setJoined] = useState(false)
+  const joinedRef = useRef(false)
   const [joining, setJoining] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [peers, setPeers] = useState<Peer[]>([])
@@ -142,7 +143,7 @@ export default function VoicechatRoom({ profile, sessionId }: VoicechatRoomProps
   }, [sessionId, postChat, createPeerConnection])
 
   const poll = useCallback(async () => {
-    if (!mountedRef.current || !joined) return
+    if (!mountedRef.current || !joinedRef.current) return
     try {
       const res = await fetch(`/api/chat?channel=voicechat&sessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
       if (!res.ok) throw new Error(`http ${res.status}`)
@@ -208,6 +209,7 @@ export default function VoicechatRoom({ profile, sessionId }: VoicechatRoomProps
       localStreamRef.current = stream
       setupAnalyser(stream, 'local')
       setJoined(true)
+      joinedRef.current = true
       mountedRef.current = true
       getIceServers().then((s) => { iceServersRef.current = s }).catch(() => {})
       sendPresence()
@@ -228,7 +230,7 @@ export default function VoicechatRoom({ profile, sessionId }: VoicechatRoomProps
     if (stream) { for (const t of stream.getTracks()) t.stop(); localStreamRef.current = null }
     if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
     postChat({ op: 'presence', sessionId, user: profileRef.current.name, color: profileRef.current.color, avatar: profileRef.current.avatar, channel: 'general' })
-    setJoined(false); setPeers([]); setTalkingIds(new Set())
+    setJoined(false); joinedRef.current = false; setPeers([]); setTalkingIds(new Set())
   }, [sessionId, postChat])
 
   const toggleMic = useCallback(() => {

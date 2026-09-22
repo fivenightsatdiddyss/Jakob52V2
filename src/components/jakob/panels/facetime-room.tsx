@@ -65,6 +65,7 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
   const [roomInput, setRoomInput] = useState('')
   const [showRoomDialog, setShowRoomDialog] = useState(false)
   const [joined, setJoined] = useState(false)
+  const joinedRef = useRef(false)
   const [joining, setJoining] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [peers, setPeers] = useState<Peer[]>([])
@@ -186,7 +187,7 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
 
   // ---- polling loop: same as chat, but also processes WebRTC signals ----
   const poll = useCallback(async () => {
-    if (!mountedRef.current || !joined) return
+    if (!mountedRef.current || !joinedRef.current) return
     try {
       // Use the SAME /api/chat endpoint that the text chat uses.
       // Pass sessionId so the server returns rtcSignals addressed to us.
@@ -291,6 +292,7 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
       // THEN attach the stream in a useEffect (the video ref isn't available
       // until after the joined view renders).
       setJoined(true)
+      joinedRef.current = true
       mountedRef.current = true
       // Fetch TURN credentials (async, non-blocking)
       getIceServers().then((servers) => { iceServersRef.current = servers }).catch(() => {})
@@ -332,6 +334,7 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
     if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
     postChat({ op: 'presence', sessionId, user: profileRef.current.name, color: profileRef.current.color, avatar: profileRef.current.avatar, channel: 'general' })
     setJoined(false)
+    joinedRef.current = false
     setPeers([])
     setPeerStates({})
   }, [sessionId, postChat])
