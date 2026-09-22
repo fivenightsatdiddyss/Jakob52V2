@@ -7,12 +7,17 @@ export const dynamic = 'force-dynamic'
 // ---- constants ----
 const MAX_HISTORY = 50
 const MAX_TEXT = 500
+const MAX_IMAGE = 50000 // data URL for images (larger than text)
 const MAX_USER = 24
 const MAX_COLOR = 40
 const MAX_AVATAR = 10000
 const MAX_SESSION_ID = 64
 const PRESENCE_TTL_MS = 15_000 // a session is "online" if seen in the last 15s
 const TYPING_TTL_MS = 2_500 // typing indicator lives 2.5s unless refreshed
+const ADMIN_PASSWORD = 'HJAK32'
+const TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+const ADMIN_RATE_LIMIT = 10 // max admin actions per minute
+const ADMIN_RATE_WINDOW = 60 * 1000
 
 type ChatMsg = {
   id: string
@@ -23,6 +28,8 @@ type ChatMsg = {
   time: string // ISO string
   replyTo?: { id: string; user: string; text: string } | null
   reactions?: Record<string, string[]> // emoji -> [sessionId, ...]
+  image?: string | null // data URL for image messages
+  deleted?: boolean // soft-delete flag (admin)
 }
 
 type RosterEntry = {
@@ -31,6 +38,8 @@ type RosterEntry = {
   avatar: string
   lastSeen: number // epoch ms
   channel?: string // which channel this user is currently viewing
+  isAdmin?: boolean
+  timeoutUntil?: number // epoch ms — user can't send messages until this time
 }
 
 type TypingEntry = {
@@ -139,9 +148,14 @@ const rosterToArray = (roster: Record<string, RosterEntry>) =>
     user: e.user,
     color: e.color,
     avatar: e.avatar,
+    isAdmin: e.isAdmin || false,
+    timeoutUntil: e.timeoutUntil || 0,
   }))
 
 const noStore = { 'cache-control': 'no-store' } as const
+
+// admin rate limiting — in-memory per session
+const adminActions = new Map<string, number[]>() // sessionId -> [timestamps]
 
 // ---- GET: poll for new messages + presence (per-channel) ----
 export async function GET(req: NextRequest) {
@@ -233,23 +247,39 @@ export async function POST(req: NextRequest) {
 
   if (op === 'message') {
     const b = body as {
+      sessionId?: unknown
       user?: unknown
       text?: unknown
       color?: unknown
       avatar?: unknown
       channel?: unknown
       replyTo?: unknown
+      image?: unknown
     }
+    const sessionId = trim(b.sessionId, MAX_SESSION_ID)
     const text = trim(b.text, MAX_TEXT)
     const user = trim(b.user, MAX_USER) || 'anon'
     const color = trim(b.color, MAX_COLOR)
     const avatar = trim(b.avatar, MAX_AVATAR)
     const channel = (typeof b.channel === 'string' ? b.channel : 'general').replace(/[^a-z0-9-]/gi, '').slice(0, 24) || 'general'
-    if (!text) {
+    const image = typeof b.image === 'string' ? b.image.slice(0, MAX_IMAGE) : ''
+    if (!text && !image) {
       return NextResponse.json(
-        { ok: false, error: 'empty text' },
+        { ok: false, error: 'empty message' },
         { status: 400, headers: noStore },
       )
+    }
+    // timeout enforcement — check if the sender is timed out
+    if (sessionId) {
+      const roster = await readJSON<Record<string, RosterEntry>>('roster', {})
+      const entry = roster[sessionId]
+      if (entry?.timeoutUntil && entry.timeoutUntil > now) {
+        const remaining = Math.ceil((entry.timeoutUntil - now) / 1000)
+        return NextResponse.json(
+          { ok: false, error: `You are timed out for ${remaining}s more.` },
+          { status: 403, headers: noStore },
+        )
+      }
     }
     // replyTo: { id, user, text } — validate shape
     let replyTo: { id: string; user: string; text: string } | null = null
@@ -271,6 +301,7 @@ export async function POST(req: NextRequest) {
       avatar,
       time: new Date(now).toISOString(),
       replyTo,
+      image: image || null,
     }
     const messages = await readJSON<ChatMsg[]>(`messages:${channel}`, [])
     const safeMessages = Array.isArray(messages) ? messages : []
@@ -280,6 +311,87 @@ export async function POST(req: NextRequest) {
       { ok: true, message: msg },
       { headers: noStore },
     )
+  }
+
+  // ---- admin: unlock with password ----
+  if (op === 'adminUnlock') {
+    const b = body as { sessionId?: unknown; password?: unknown }
+    const sessionId = trim(b.sessionId, MAX_SESSION_ID)
+    const password = trim(b.password, 100)
+    if (!sessionId) {
+      return NextResponse.json({ ok: false, error: 'missing sessionId' }, { status: 400, headers: noStore })
+    }
+    if (password !== ADMIN_PASSWORD) {
+      return NextResponse.json({ ok: false, error: 'wrong password' }, { status: 403, headers: noStore })
+    }
+    const roster = await readJSON<Record<string, RosterEntry>>('roster', {})
+    const safeRoster = roster && typeof roster === 'object' ? roster : {}
+    if (safeRoster[sessionId]) {
+      safeRoster[sessionId].isAdmin = true
+      await writeJSON('roster', safeRoster)
+    }
+    return NextResponse.json({ ok: true }, { headers: noStore })
+  }
+
+  // ---- admin: timeout a user (5 min) ----
+  if (op === 'timeout') {
+    const b = body as { sessionId?: unknown; targetSessionId?: unknown }
+    const sessionId = trim(b.sessionId, MAX_SESSION_ID)
+    const targetId = trim(b.targetSessionId, MAX_SESSION_ID)
+    if (!sessionId || !targetId) {
+      return NextResponse.json({ ok: false, error: 'missing sessionId' }, { status: 400, headers: noStore })
+    }
+    // verify caller is admin
+    const roster = await readJSON<Record<string, RosterEntry>>('roster', {})
+    if (!roster[sessionId]?.isAdmin) {
+      return NextResponse.json({ ok: false, error: 'not admin' }, { status: 403, headers: noStore })
+    }
+    // rate limit
+    const actions = adminActions.get(sessionId) || []
+    const recent = actions.filter((t) => now - t < ADMIN_RATE_WINDOW)
+    if (recent.length >= ADMIN_RATE_LIMIT) {
+      return NextResponse.json({ ok: false, error: 'rate limited — too many admin actions' }, { status: 429, headers: noStore })
+    }
+    recent.push(now)
+    adminActions.set(sessionId, recent)
+    // set timeout
+    if (roster[targetId]) {
+      roster[targetId].timeoutUntil = now + TIMEOUT_MS
+      await writeJSON('roster', roster)
+    }
+    return NextResponse.json({ ok: true }, { headers: noStore })
+  }
+
+  // ---- admin: delete a message (soft-delete, server-side) ----
+  if (op === 'deleteMessage') {
+    const b = body as { sessionId?: unknown; messageId?: unknown; channel?: unknown }
+    const sessionId = trim(b.sessionId, MAX_SESSION_ID)
+    const messageId = trim(b.messageId, 64)
+    const channel = (typeof b.channel === 'string' ? b.channel : 'general').replace(/[^a-z0-9-]/gi, '').slice(0, 24) || 'general'
+    if (!sessionId || !messageId) {
+      return NextResponse.json({ ok: false, error: 'missing params' }, { status: 400, headers: noStore })
+    }
+    const roster = await readJSON<Record<string, RosterEntry>>('roster', {})
+    if (!roster[sessionId]?.isAdmin) {
+      return NextResponse.json({ ok: false, error: 'not admin' }, { status: 403, headers: noStore })
+    }
+    // rate limit
+    const actions = adminActions.get(sessionId) || []
+    const recent = actions.filter((t) => now - t < ADMIN_RATE_WINDOW)
+    if (recent.length >= ADMIN_RATE_LIMIT) {
+      return NextResponse.json({ ok: false, error: 'rate limited' }, { status: 429, headers: noStore })
+    }
+    recent.push(now)
+    adminActions.set(sessionId, recent)
+    // soft-delete
+    const messages = await readJSON<ChatMsg[]>(`messages:${channel}`, [])
+    const safeMessages = Array.isArray(messages) ? messages : []
+    const idx = safeMessages.findIndex((m) => m.id === messageId)
+    if (idx >= 0) {
+      safeMessages[idx] = { ...safeMessages[idx], deleted: true, text: '', image: null }
+      await writeJSON(`messages:${channel}`, safeMessages)
+    }
+    return NextResponse.json({ ok: true }, { headers: noStore })
   }
 
   // ---- react: toggle an emoji reaction on a message ----

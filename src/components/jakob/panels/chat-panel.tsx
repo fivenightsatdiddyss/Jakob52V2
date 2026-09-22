@@ -22,6 +22,9 @@ import {
   Plus,
   Lock,
   Mic,
+  Shield,
+  Ban,
+  Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -37,6 +40,8 @@ type ChatMsg = {
   time: string
   replyTo?: { id: string; user: string; text: string } | null
   reactions?: Record<string, string[]> // emoji -> [sessionId, ...]
+  image?: string | null // data URL for image messages
+  deleted?: boolean // soft-delete flag (admin)
 }
 
 type Profile = {
@@ -50,6 +55,8 @@ type RosterEntry = {
   user: string
   color: string
   avatar: string
+  isAdmin?: boolean
+  timeoutUntil?: number
 }
 
 type TypingEntry = {
@@ -323,6 +330,12 @@ export default function ChatPanel() {
   const [replyingTo, setReplyingTo] = useState<ChatMsg | null>(null)
   // reaction picker — which message's emoji picker is open
   const [reactPickerFor, setReactPickerFor] = useState<string | null>(null)
+  // admin state
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [showAdminUnlock, setShowAdminUnlock] = useState(false)
+  const [adminPassword, setAdminPassword] = useState('')
+  // image attachment (preview before sending)
+  const [pendingImage, setPendingImage] = useState<string | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const sessionIdRef = useRef<string>('')
@@ -611,19 +624,23 @@ export default function ChatPanel() {
       avatar: p.avatar,
       time: new Date().toISOString(),
       replyTo: rt,
+      image: pendingImage,
     }
     setMessages((prev) => [...prev, optimistic])
     postChat({
       op: 'message',
+      sessionId: sessionIdRef.current,
       user: p.name,
       text: value,
       color: p.color,
       avatar: p.avatar,
       channel: activeChannelRef.current,
       replyTo: rt,
+      image: pendingImage,
     })
-    // clear reply + typing indicator
+    // clear reply + image + typing indicator
     setReplyingTo(null)
+    setPendingImage(null)
     if (typingClearRef.current) clearTimeout(typingClearRef.current)
     typingClearRef.current = null
     setTypingUser(null)
@@ -693,6 +710,103 @@ export default function ChatPanel() {
     setShowRoomDialog(false)
     setRoomInput('')
     toast.success(`joining room ${code}`)
+  }
+
+  // ---- admin functions ----
+  const unlockAdmin = async () => {
+    const sid = sessionIdRef.current
+    if (!sid) return
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'adminUnlock', sessionId: sid, password: adminPassword }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        setIsAdmin(true)
+        setShowAdminUnlock(false)
+        setAdminPassword('')
+        toast.success('Admin unlocked', { description: 'You now have admin powers.' })
+      } else {
+        toast.error('Wrong password')
+      }
+    } catch {
+      toast.error('Failed to unlock admin')
+    }
+  }
+
+  const timeoutUser = async (targetSessionId: string, targetName: string) => {
+    const sid = sessionIdRef.current
+    if (!sid) return
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'timeout', sessionId: sid, targetSessionId }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        toast.success(`Timed out ${targetName}`, { description: '5 minutes' })
+      } else {
+        toast.error(data.error || 'Failed to timeout')
+      }
+    } catch {
+      toast.error('Failed to timeout')
+    }
+  }
+
+  const deleteMessage = async (messageId: string) => {
+    const sid = sessionIdRef.current
+    if (!sid) return
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'deleteMessage', sessionId: sid, messageId, channel: activeChannelRef.current }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        // remove locally
+        setMessages((prev) => prev.filter((m) => m.id !== messageId))
+        toast.success('Message deleted')
+      } else {
+        toast.error(data.error || 'Failed to delete')
+      }
+    } catch {
+      toast.error('Failed to delete')
+    }
+  }
+
+  // ---- image upload for chat messages ----
+  const handleImageUpload = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please choose an image file')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const img = new Image()
+      img.onload = () => {
+        // downscale to max 400px wide
+        const canvas = document.createElement('canvas')
+        const maxW = 400
+        const scale = Math.min(1, maxW / img.width)
+        canvas.width = img.width * scale
+        canvas.height = img.height * scale
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.6)
+        if (dataUrl.length > 50000) {
+          toast.error('Image too large', { description: 'Try a smaller image' })
+          return
+        }
+        setPendingImage(dataUrl)
+      }
+      img.src = reader.result as string
+    }
+    reader.readAsDataURL(file)
   }
 
   const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -868,7 +982,7 @@ export default function ChatPanel() {
           </div>
         </div>
 
-        {/* You + edit profile */}
+        {/* You + edit profile + admin */}
         <div className="border-t border-white/10 p-3">
           <div className="flex items-center gap-2 rounded-xl glass-subtle px-2.5 py-2 text-xs text-white/60">
             <Avatar avatar={profile.avatar} name={profile.name || 'guest'} size="sm" />
@@ -877,6 +991,11 @@ export default function ChatPanel() {
               <span className={cn('font-semibold', profile.color)}>
                 {profile.name || '…'}
               </span>
+              {isAdmin && (
+                <span className="ml-1 text-[9px] font-bold text-fuchsia-300 [text-shadow:0_0_8px_rgba(217,70,239,0.8)]">
+                  [ADMIN]
+                </span>
+              )}
             </span>
             <button
               type="button"
@@ -887,6 +1006,22 @@ export default function ChatPanel() {
               <Pencil className="h-3.5 w-3.5" />
             </button>
           </div>
+          {/* Admin panel button */}
+          {!isAdmin ? (
+            <button
+              type="button"
+              onClick={() => setShowAdminUnlock(true)}
+              className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg bg-white/4 px-3 py-1.5 text-[11px] text-white/40 transition-colors hover:bg-white/8 hover:text-white/70"
+            >
+              <Shield className="h-3 w-3" />
+              admin panel
+            </button>
+          ) : (
+            <div className="mt-2 flex items-center justify-center gap-1.5 rounded-lg bg-fuchsia-500/10 px-3 py-1.5 text-[11px] font-medium text-fuchsia-200 ring-1 ring-inset ring-fuchsia-400/20">
+              <Shield className="h-3 w-3" />
+              admin active
+            </div>
+          )}
         </div>
       </aside>
 
@@ -969,9 +1104,31 @@ export default function ChatPanel() {
                           {m.user}
                           {mine ? <span className="ml-1 text-[10px] text-white/40">(you)</span> : null}
                         </span>
+                        {/* [ADMIN] tag — check if this message's sender is an admin in the roster */}
+                        {roster.find((r) => r.user === m.user)?.isAdmin && (
+                          <span className="text-[8px] font-bold text-fuchsia-300 [text-shadow:0_0_6px_rgba(217,70,239,0.8)]">
+                            [ADMIN]
+                          </span>
+                        )}
                         <span className="text-[10px] text-white/30">{formatTime(m.time)}</span>
                       </div>
-                      <p className="text-sm leading-relaxed text-white/80">{m.text}</p>
+                      <p className="text-sm leading-relaxed text-white/80">
+                        {m.deleted ? (
+                          <span className="italic text-white/30">message deleted by admin</span>
+                        ) : (
+                          m.text
+                        )}
+                      </p>
+                      {/* image attachment */}
+                      {m.image && !m.deleted && (
+                        <img
+                          src={m.image}
+                          alt="shared image"
+                          className="mt-2 max-w-full rounded-xl border border-white/10"
+                          style={{ maxHeight: '300px' }}
+                          loading="lazy"
+                        />
+                      )}
 
                       {/* reactions */}
                       {m.reactions && Object.keys(m.reactions).length > 0 ? (
@@ -1029,6 +1186,30 @@ export default function ChatPanel() {
                             </div>
                           ) : null}
                         </div>
+                        {/* admin actions: timeout + delete (only for admins, not on own messages) */}
+                        {isAdmin && m.user !== myName && !m.deleted && (
+                          <>
+                            <button
+                              onClick={() => {
+                                // find the sender's sessionId from roster
+                                const target = roster.find((r) => r.user === m.user)
+                                if (target) timeoutUser(target.id, target.user)
+                                else toast.error('User not found in roster')
+                              }}
+                              title="time out for 5 minutes"
+                              className="grid h-7 w-7 place-items-center rounded-md text-amber-400/60 transition-colors hover:bg-amber-500/20 hover:text-amber-300"
+                            >
+                              <Ban className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => deleteMessage(m.id)}
+                              title="delete message"
+                              className="grid h-7 w-7 place-items-center rounded-md text-rose-400/60 transition-colors hover:bg-rose-500/20 hover:text-rose-300"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </motion.div>
@@ -1100,6 +1281,28 @@ export default function ChatPanel() {
           }}
           className="flex items-center gap-2 border-t border-white/10 p-3"
         >
+          {/* image upload button */}
+          <label
+            title="send image"
+            className={cn(
+              'grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-xl transition-colors',
+              'glass-subtle text-white/50 hover:bg-white/12 hover:text-white',
+              !connected && 'pointer-events-none opacity-40',
+            )}
+          >
+            <ImageIcon className="h-4.5 w-4.5" />
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              disabled={!connected}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) handleImageUpload(f)
+                e.target.value = ''
+              }}
+            />
+          </label>
           <input
             value={input}
             onChange={onInputChange}
@@ -1110,12 +1313,27 @@ export default function ChatPanel() {
           />
           <button
             type="submit"
-            disabled={!connected || !input.trim()}
+            disabled={!connected || (!input.trim() && !pendingImage)}
             className="glass-sheen grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 text-white transition-transform hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
           >
             <Send className="h-4.5 w-4.5" />
           </button>
         </form>
+
+        {/* Pending image preview bar */}
+        {pendingImage && (
+          <div className="mx-3 mb-1 flex items-center gap-2 rounded-xl glass-subtle px-3 py-2 text-xs">
+            <img src={pendingImage} alt="pending" className="h-12 w-12 rounded-lg object-cover" />
+            <span className="flex-1 text-white/50">image ready to send</span>
+            <button
+              onClick={() => setPendingImage(null)}
+              className="grid h-6 w-6 place-items-center rounded-md text-white/40 transition-colors hover:bg-white/12 hover:text-white"
+              title="remove image"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
         </>
         )}
       </div>
@@ -1332,6 +1550,58 @@ export default function ChatPanel() {
                   className="flex-1 rounded-xl bg-gradient-to-br from-fuchsia-500/70 to-violet-600/70 px-4 py-2 text-sm font-semibold text-white transition-transform hover:scale-[1.02] active:scale-95"
                 >
                   Save
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {/* Admin unlock dialog */}
+      <AnimatePresence>
+        {showAdminUnlock ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4"
+            onClick={() => setShowAdminUnlock(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-3xl glass-strong glass-sheen p-6"
+            >
+              <div className="mb-4 flex items-center gap-2">
+                <Shield className="h-5 w-5 text-fuchsia-300" />
+                <h3 className="text-lg font-semibold text-white">Admin Panel</h3>
+              </div>
+              <p className="mb-4 text-xs text-white/50">
+                Enter the admin password to unlock timeout + delete powers.
+              </p>
+              <input
+                type="password"
+                value={adminPassword}
+                onChange={(e) => setAdminPassword(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') unlockAdmin() }}
+                placeholder="password"
+                autoFocus
+                className="glass-subtle mb-3 w-full rounded-xl border border-white/10 bg-transparent px-4 py-2.5 text-sm text-white placeholder:text-white/35 focus:border-fuchsia-400/40 focus:outline-none"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowAdminUnlock(false)}
+                  className="flex-1 rounded-xl bg-white/8 px-4 py-2 text-sm text-white/70 transition-colors hover:bg-white/15"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={unlockAdmin}
+                  className="glass-sheen flex-1 rounded-xl bg-gradient-to-br from-fuchsia-500/70 to-violet-600/70 px-4 py-2 text-sm font-semibold text-white transition-transform hover:scale-[1.02] active:scale-95"
+                >
+                  Unlock
                 </button>
               </div>
             </motion.div>
