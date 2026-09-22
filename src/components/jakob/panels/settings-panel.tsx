@@ -16,6 +16,7 @@ import {
   Orbit,
   Waves,
   Ghost as GhostIcon,
+  FileCode,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
@@ -60,11 +61,53 @@ function openAboutBlankCloak() {
     win.document.write(outer)
     win.document.close()
     toast.success('Cloak deployed', {
-      description: 'jakob-52 is running inside an about:blank tab via srcdoc.',
+      description: 'jakob-52 is running inside an about:blank tab.',
     })
+    // Redirect the OLD tab (the one where the user clicked) to google.com
+    // so there's only one visible jakob-52 tab (the cloaked one).
+    setTimeout(() => {
+      window.location.href = 'https://www.google.com'
+    }, 500)
   } catch {
     // Fallback: navigate the new window straight to the app.
     win.location.href = url
+  }
+}
+
+/**
+ * Blob cloak — opens the site in a new tab whose URL is a blob: URL.
+ * A blob: URL contains the entire HTML document inline, so the address bar
+ * shows "blob:https://yoursite.com/uuid" instead of the real URL. The old
+ * tab is redirected to google.com (same as the about:blank cloak).
+ */
+function openBlobCloak() {
+  const url = `${window.location.origin}${window.location.pathname}#enter`
+
+  // Build a self-contained HTML document that loads the real app in an iframe
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title></title><style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#04020a}iframe{border:0;width:100vw;height:100vh;display:block}</style></head><body><iframe src="${url}" allow="autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; gamepad; popups" allowfullscreen></iframe></body></html>`
+
+  try {
+    const blob = new Blob([doc], { type: 'text/html' })
+    const blobUrl = URL.createObjectURL(blob)
+    const win = window.open(blobUrl, '_blank')
+    if (!win) {
+      toast.error('Popup blocked', {
+        description: 'Allow popups for this site to use the blob cloak.',
+      })
+      return
+    }
+    toast.success('Blob cloak deployed', {
+      description: 'jakob-52 is running inside a blob: URL tab.',
+    })
+    // Redirect the old tab to google.com
+    setTimeout(() => {
+      URL.revokeObjectURL(blobUrl) // clean up (the new tab has its own reference)
+      window.location.href = 'https://www.google.com'
+    }, 500)
+  } catch {
+    toast.error('Blob cloak failed', {
+      description: 'Your browser may not support blob URLs.',
+    })
   }
 }
 
@@ -680,6 +723,44 @@ export default function SettingsPanel() {
           >
             <Ghost className="mr-2 h-4 w-4" />
             Open in About:Blank
+          </Button>
+        </div>
+      </motion.section>
+
+      {/* Blob cloak — opens the site in a blob: URL tab */}
+      <motion.section
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.05, duration: 0.5 }}
+        className="glass glass-sheen relative mb-6 overflow-hidden rounded-3xl p-6"
+      >
+        <div
+          className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full blur-3xl"
+          style={{ background: 'radial-gradient(circle, rgba(34,197,94,0.25), transparent 70%)' }}
+        />
+        <div className="relative flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-4">
+            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-emerald-500/40 to-teal-500/30 text-white">
+              <FileCode className="h-7 w-7" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-lg font-semibold text-white">Blob Cloak</h3>
+                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-200">
+                  stealth
+                </span>
+              </div>
+              <p className="mt-1 max-w-md text-sm text-white/55">
+                Opens the site in a new tab with a <code className="rounded bg-white/10 px-1.5 py-0.5 text-xs text-emerald-200">blob:</code> URL — the address bar shows a blob reference instead of the real URL. The old tab redirects to Google.
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={openBlobCloak}
+            className="glass-sheen shrink-0 rounded-xl bg-gradient-to-br from-emerald-500/70 to-teal-600/70 px-5 text-white hover:from-emerald-500 hover:to-teal-600"
+          >
+            <FileCode className="mr-2 h-4 w-4" />
+            Open in Blob URL
           </Button>
         </div>
       </motion.section>

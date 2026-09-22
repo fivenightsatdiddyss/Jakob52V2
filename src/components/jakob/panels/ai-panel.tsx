@@ -2,33 +2,10 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Bot, Send, Sparkles, User, Cpu, AlertTriangle, Loader2, Zap } from 'lucide-react'
+import { Bot, Send, Sparkles, User, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 type Msg = { role: 'user' | 'ai'; text: string }
-type ModelOption = {
-  id: string
-  label: string
-  size: string
-  desc: string
-}
-
-// WebLLM models — run entirely in-browser via WebGPU. No server, no API.
-// The model downloads once on first load, then is cached by the browser.
-const MODELS: ModelOption[] = [
-  {
-    id: 'Llama-3.2-1B-Instruct-q4f32_1-MLC',
-    label: 'Llama 3.2 1B',
-    size: '~700 MB',
-    desc: 'recommended · best balance of quality + speed',
-  },
-  {
-    id: 'Qwen2.5-0.5B-Instruct-q4f32_1-MLC',
-    label: 'Qwen 2.5 0.5B',
-    size: '~400 MB',
-    desc: 'smaller + faster · lower quality',
-  },
-]
 
 const SUGGESTIONS = [
   'Explain a black hole',
@@ -37,154 +14,68 @@ const SUGGESTIONS = [
   'Summarize jakob-52',
 ]
 
-const SYSTEM_PROMPT =
-  'You are the jakob-52 AI assistant. You live behind a liquid-glass interface orbiting a black hole. Answer concisely and helpfully. Keep responses under ~150 words unless asked for more.'
-
-// Lazy-loaded engine (only created when the user clicks "load model").
-// Uses the main-thread engine — Turbopack can't bundle the Web Worker URL
-// from node_modules. Streaming keeps the UI responsive between tokens.
-type Engine = {
-  chat: {
-    completions: {
-      create: (opts: {
-        messages: Array<{ role: string; content: string }>
-        stream?: boolean
-        temperature?: number
-        max_tokens?: number
-      }) => Promise<AsyncIterable<{ choices: Array<{ delta?: { content?: string } }> }>>
-    }
-  }
-  unload: () => Promise<void>
-}
-
-let enginePromise: Promise<Engine> | null = null
-let loadedModelId: string | null = null
-
-async function getEngine(
-  modelId: string,
-  onProgress: (p: number, text: string) => void,
-): Promise<Engine> {
-  if (enginePromise && loadedModelId === modelId) return enginePromise
-  // If switching models, unload the old one first
-  if (enginePromise) {
-    try {
-      const old = await enginePromise
-      await old.unload()
-    } catch {
-      /* ignore */
-    }
-    enginePromise = null
-  }
-
-  const webllm = await import('@mlc-ai/web-llm')
-  enginePromise = webllm
-    .CreateMLCEngine(modelId, {
-      initProgressCallback: (info: { progress: number; text: string }) => {
-        onProgress(info.progress, info.text)
-      },
-    })
-    .then((e: unknown) => e as Engine)
-  loadedModelId = modelId
-  return enginePromise
-}
-
-function checkWebGPU(): boolean {
-  return typeof navigator !== 'undefined' && !!navigator.gpu
-}
-
 export default function AiPanel() {
   const [messages, setMessages] = useState<Msg[]>([
     {
       role: 'ai',
-      text: "Welcome to the jakob-52 AI deck. I run a real language model entirely in your browser — no server, no API. Click 'Load AI model' to download it once, then ask me anything.",
+      text: "Welcome to the jakob-52 AI deck. I'm a real language model running server-side — ask me anything.",
     },
   ])
   const [input, setInput] = useState('')
   const [typing, setTyping] = useState(false)
-
-  // model loading state
-  const [webgpuOk] = useState(checkWebGPU)
-  const [modelUnloaded, setModelUnloaded] = useState(true)
-  const [loadingModel, setLoadingModel] = useState(false)
-  const [loadProgress, setLoadProgress] = useState(0)
-  const [loadText, setLoadText] = useState('')
-  const [selectedModel, setSelectedModel] = useState(MODELS[0])
-
   const scrollRef = useRef<HTMLDivElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, typing])
 
-  const loadModel = useCallback(async () => {
-    setLoadingModel(true)
-    setLoadProgress(0)
-    setLoadText('Initializing WebGPU…')
+  const send = useCallback(async (text: string) => {
+    const value = text.trim()
+    if (!value || typing) return
+
+    setMessages((m) => [...m, { role: 'user', text: value }])
+    setInput('')
+    setTyping(true)
+
+    // Add an empty AI message we'll fill as tokens stream in
+    setMessages((m) => [...m, { role: 'ai', text: '' }])
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
     try {
-      await getEngine(selectedModel.id, (p, text) => {
-        setLoadProgress(Math.round(p * 100))
-        setLoadText(text)
+      const res = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          messages: [...messages.filter((m) => m.text), { role: 'user', content: value }],
+        }),
+        signal: controller.signal,
       })
-      setModelUnloaded(false)
+
+      if (!res.ok) throw new Error(`http ${res.status}`)
+
+      const data = (await res.json()) as { text?: string; error?: string }
+      const reply = data.text || data.error || '(no response)'
+
+      setMessages((m) => {
+        const next = [...m]
+        next[next.length - 1] = { role: 'ai', text: reply }
+        return next
+      })
     } catch (err) {
-      console.error('model load failed', err)
+      if ((err as Error).name === 'AbortError') return
+      setMessages((m) => {
+        const next = [...m]
+        next[next.length - 1] = { role: 'ai', text: `(error: ${(err as Error).message})` }
+        return next
+      })
     } finally {
-      setLoadingModel(false)
+      setTyping(false)
+      abortRef.current = null
     }
-  }, [selectedModel])
-
-  const send = useCallback(
-    async (text: string) => {
-      const value = text.trim()
-      if (!value || typing) return
-      if (modelUnloaded) return
-
-      setMessages((m) => [...m, { role: 'user', text: value }])
-      setInput('')
-      setTyping(true)
-
-      // Build the conversation for the engine
-      const conv = [
-        { role: 'system', content: SYSTEM_PROMPT },
-        ...messages
-          .filter((m) => m.text !== messages[0].text) // skip the welcome message
-          .map((m) => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.text })),
-        { role: 'user', content: value },
-      ]
-
-      try {
-        const engine = await getEngine(selectedModel.id, () => {})
-        const stream = await engine.chat.completions.create({
-          messages: conv,
-          stream: true,
-          temperature: 0.7,
-          max_tokens: 512,
-        })
-
-        let assistantText = ''
-        // Add an empty AI message we'll fill as tokens stream in
-        setMessages((m) => [...m, { role: 'ai', text: '' }])
-        for await (const chunk of stream) {
-          const delta = chunk.choices?.[0]?.delta?.content || ''
-          assistantText += delta
-          // Update the last message progressively
-          setMessages((m) => {
-            const next = [...m]
-            next[next.length - 1] = { role: 'ai', text: assistantText }
-            return next
-          })
-        }
-      } catch (err) {
-        setMessages((m) => [
-          ...m,
-          { role: 'ai', text: `(error: ${(err as Error).message})` },
-        ])
-      } finally {
-        setTyping(false)
-      }
-    },
-    [messages, typing, modelUnloaded, selectedModel],
-  )
+  }, [messages, typing])
 
   return (
     <motion.div
@@ -200,98 +91,13 @@ export default function AiPanel() {
         </div>
         <div>
           <h2 className="text-2xl font-bold text-white">AI</h2>
-          <p className="text-sm text-white/45">
-            {modelUnloaded
-              ? 'in-browser language model · no server'
-              : `running ${selectedModel.label} locally`}
-          </p>
+          <p className="text-sm text-white/45">the mind behind the glass · server-side LLM</p>
         </div>
-        {modelUnloaded ? (
-          <span className="ml-auto inline-flex items-center gap-1.5 rounded-full glass-subtle px-3 py-1 text-xs text-white/50">
-            <Cpu className="h-3 w-3" />
-            idle
-          </span>
-        ) : (
-          <span className="ml-auto inline-flex items-center gap-1.5 rounded-full glass-subtle px-3 py-1 text-xs text-emerald-300">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.7)]" />
-            ready
-          </span>
-        )}
+        <span className="ml-auto inline-flex items-center gap-1.5 rounded-full glass-subtle px-3 py-1 text-xs text-emerald-300">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.7)]" />
+          online
+        </span>
       </header>
-
-      {/* Model load gate */}
-      {modelUnloaded && (
-        <div className="glass glass-sheen mb-4 rounded-3xl p-6">
-          {!webgpuOk ? (
-            <div className="flex items-start gap-3 text-sm text-amber-200">
-              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" />
-              <div>
-                <p className="font-semibold">WebGPU not available</p>
-                <p className="mt-1 text-white/55">
-                  The in-browser AI needs WebGPU, which is available in Chrome, Edge, and other Chromium browsers. Try opening this site in Chrome to use the AI.
-                </p>
-              </div>
-            </div>
-          ) : loadingModel ? (
-            <div>
-              <div className="mb-3 flex items-center gap-2 text-sm text-white">
-                <Loader2 className="h-4 w-4 animate-spin text-fuchsia-300" />
-                <span className="font-medium">Loading {selectedModel.label}…</span>
-                <span className="ml-auto font-mono tabular-nums text-fuchsia-200">
-                  {loadProgress}%
-                </span>
-              </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-fuchsia-500 to-violet-500 transition-all"
-                  style={{ width: `${loadProgress}%` }}
-                />
-              </div>
-              <p className="mt-2 truncate text-[11px] text-white/40">{loadText}</p>
-              <p className="mt-1 text-[11px] text-white/30">
-                downloads once · cached for future visits
-              </p>
-            </div>
-          ) : (
-            <div>
-              <div className="mb-4 flex items-center gap-2 text-sm text-white">
-                <Cpu className="h-4 w-4 text-fuchsia-300" />
-                <span className="font-medium">Load an AI model</span>
-              </div>
-              <div className="mb-4 grid gap-2 sm:grid-cols-2">
-                {MODELS.map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => setSelectedModel(m)}
-                    className={cn(
-                      'rounded-2xl border p-3 text-left transition-all',
-                      selectedModel.id === m.id
-                        ? 'border-fuchsia-400/40 bg-fuchsia-500/10'
-                        : 'border-white/8 bg-white/4 hover:bg-white/8',
-                    )}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-white">{m.label}</span>
-                      <span className="text-[10px] text-white/40">{m.size}</span>
-                    </div>
-                    <p className="mt-0.5 text-[11px] text-white/45">{m.desc}</p>
-                  </button>
-                ))}
-              </div>
-              <button
-                onClick={loadModel}
-                className="glass-sheen inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 px-5 py-3 text-sm font-medium text-white transition-transform hover:scale-[1.02] active:scale-95"
-              >
-                <Zap className="h-4 w-4" />
-                Load {selectedModel.label} ({selectedModel.size})
-              </button>
-              <p className="mt-2 text-center text-[11px] text-white/35">
-                runs 100% in your browser · no data leaves your device
-              </p>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Messages */}
       <div
@@ -355,21 +161,19 @@ export default function AiPanel() {
       </div>
 
       {/* Suggestions */}
-      {modelUnloaded ? null : (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {SUGGESTIONS.map((s) => (
-            <button
-              key={s}
-              onClick={() => !typing && send(s)}
-              disabled={typing}
-              className="rounded-full glass-subtle px-3 py-1.5 text-xs text-white/70 transition-colors hover:bg-white/15 hover:text-white disabled:opacity-40"
-            >
-              <Sparkles className="mr-1 inline h-3 w-3 text-fuchsia-300" />
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {SUGGESTIONS.map((s) => (
+          <button
+            key={s}
+            onClick={() => !typing && send(s)}
+            disabled={typing}
+            className="rounded-full glass-subtle px-3 py-1.5 text-xs text-white/70 transition-colors hover:bg-white/15 hover:text-white disabled:opacity-40"
+          >
+            <Sparkles className="mr-1 inline h-3 w-3 text-fuchsia-300" />
+            {s}
+          </button>
+        ))}
+      </div>
 
       {/* Input */}
       <form
@@ -382,13 +186,13 @@ export default function AiPanel() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={modelUnloaded ? 'load the model to start chatting…' : 'Message the AI…'}
-          disabled={modelUnloaded || typing}
+          placeholder="Message the AI…"
+          disabled={typing}
           className="glass-subtle flex-1 rounded-2xl border border-white/10 bg-transparent px-4 py-3 text-sm text-white placeholder:text-white/35 focus:border-fuchsia-400/40 focus:outline-none disabled:opacity-50"
         />
         <button
           type="submit"
-          disabled={modelUnloaded || typing || !input.trim()}
+          disabled={typing || !input.trim()}
           className="glass-sheen grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 text-white transition-transform hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
         >
           {typing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}

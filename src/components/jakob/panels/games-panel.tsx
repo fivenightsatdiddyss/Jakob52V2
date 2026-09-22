@@ -4,7 +4,15 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Gamepad2, Search, X, Maximize2, Minimize2, Grid2x2, Loader2, RefreshCw, ExternalLink } from 'lucide-react'
 import { GAMES, type Game } from './games-data'
+import { GN_MATH_GAMES } from './gnmath-data'
 import { cn } from '@/lib/utils'
+
+type Provider = 'html5' | 'gnmath'
+
+const PROVIDERS: { id: Provider; label: string }[] = [
+  { id: 'html5', label: 'HTML5' },
+  { id: 'gnmath', label: 'GN-MATH' },
+]
 
 const TYPE_LABEL: Record<string, string> = {
   iframe: 'web',
@@ -27,6 +35,7 @@ const PAGE_SIZE = 48
 export default function GamesPanel() {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<FilterId>('all')
+  const [provider, setProvider] = useState<Provider>('html5')
   const [visible, setVisible] = useState(PAGE_SIZE)
   const [active, setActive] = useState<Game | null>(null)
   const [fullscreen, setFullscreen] = useState(false)
@@ -67,20 +76,28 @@ export default function GamesPanel() {
     }
   }, [])
 
+  // Normalize GN-MATH games to the Game shape (all 'iframe' type)
+  const gnmathNormalized: Game[] = useMemo(
+    () => GN_MATH_GAMES.map((g) => ({ name: g.name, url: g.url, thumb: g.thumb, type: 'iframe' as const })),
+    [],
+  )
+
+  const activeGames = provider === 'html5' ? GAMES : gnmathNormalized
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return GAMES.filter((g) => {
-      if (filter !== 'all' && g.type !== filter && !(filter === 'unity' && g.type === 'unityframe')) {
+    return activeGames.filter((g) => {
+      if (provider === 'html5' && filter !== 'all' && g.type !== filter && !(filter === 'unity' && g.type === 'unityframe')) {
         return false
       }
       if (!q) return true
       return g.name.toLowerCase().includes(q)
     })
-  }, [query, filter])
+  }, [query, filter, provider, activeGames])
 
   // Reset pagination when the search key changes — done during render
   // (React's recommended pattern) to avoid a cascading setState in an effect.
-  const searchKey = query + '|' + filter
+  const searchKey = query + '|' + filter + '|' + provider
   const [lastSearchKey, setLastSearchKey] = useState(searchKey)
   if (searchKey !== lastSearchKey) {
     setLastSearchKey(searchKey)
@@ -144,8 +161,25 @@ export default function GamesPanel() {
         <div>
           <h2 className="text-2xl font-bold text-white">Games</h2>
           <p className="text-sm text-white/45">
-            {GAMES.length} titles orbiting the hole · click to launch
+            {activeGames.length} titles · {provider === 'html5' ? 'HTML5' : 'GN-MATH'} provider
           </p>
+        </div>
+        {/* Provider toggle */}
+        <div className="ml-auto flex items-center gap-1 rounded-2xl glass-subtle p-1">
+          {PROVIDERS.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => setProvider(p.id)}
+              className={cn(
+                'rounded-xl px-3 py-1.5 text-xs font-medium transition-all',
+                provider === p.id
+                  ? 'bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 text-white'
+                  : 'text-white/55 hover:text-white',
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
         </div>
       </header>
 
@@ -156,7 +190,7 @@ export default function GamesPanel() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={`search ${GAMES.length} games…`}
+            placeholder={`search ${activeGames.length} games…`}
             className="flex-1 bg-transparent text-sm text-white placeholder:text-white/35 focus:outline-none"
           />
           {query && (
