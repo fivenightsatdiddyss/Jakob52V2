@@ -57,6 +57,7 @@ type RosterEntry = {
   avatar: string
   isAdmin?: boolean
   timeoutUntil?: number
+  channel?: string
 }
 
 type TypingEntry = {

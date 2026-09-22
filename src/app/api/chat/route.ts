@@ -150,6 +150,7 @@ const rosterToArray = (roster: Record<string, RosterEntry>) =>
     avatar: e.avatar,
     isAdmin: e.isAdmin || false,
     timeoutUntil: e.timeoutUntil || 0,
+    channel: e.channel || 'general',
   }))
 
 const noStore = { 'cache-control': 'no-store' } as const
@@ -157,17 +158,39 @@ const noStore = { 'cache-control': 'no-store' } as const
 // admin rate limiting — in-memory per session
 const adminActions = new Map<string, number[]>() // sessionId -> [timestamps]
 
-// ---- GET: poll for new messages + presence (per-channel) ----
+// WebRTC signal type — for facetime/voicechat peer connections
+type WebRtcSignal = {
+  id: string
+  from: string
+  to: string
+  type: 'offer' | 'answer' | 'ice'
+  data: unknown
+  t: number
+}
+
+// ---- GET: poll for new messages + presence + WebRTC signals (per-channel) ----
 export async function GET(req: NextRequest) {
   const since = req.nextUrl.searchParams.get('since') || ''
   const channel = (req.nextUrl.searchParams.get('channel') || 'general').replace(/[^a-z0-9-]/gi, '').slice(0, 24) || 'general'
+  const sessionId = (req.nextUrl.searchParams.get('sessionId') || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64)
   const now = Date.now()
 
-  const [messages, roster, typing] = await Promise.all([
+  // Read messages, roster, typing, AND WebRTC signals (if sessionId provided)
+  const reads: Promise<unknown>[] = [
     readJSON<ChatMsg[]>(`messages:${channel}`, []),
     readJSON<Record<string, RosterEntry>>('roster', {}),
     readJSON<Record<string, TypingEntry>>('typing', {}),
-  ])
+  ]
+  if (sessionId) {
+    reads.push(readJSON<WebRtcSignal[]>(`rtc:${sessionId}`, []))
+  }
+
+  const [messages, roster, typing, mySignals] = await Promise.all(reads) as [
+    ChatMsg[],
+    Record<string, RosterEntry>,
+    Record<string, TypingEntry>,
+    WebRtcSignal[] | null,
+  ]
 
   const safeMessages = Array.isArray(messages) ? messages : []
   const safeRoster =
@@ -218,6 +241,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // Process + clear WebRTC signals addressed to this session (for facetime/voicechat)
+  let rtcSignals: Array<{ id: string; from: string; type: string; data: unknown }> = []
+  if (sessionId && mySignals && Array.isArray(mySignals) && mySignals.length > 0) {
+    const now_ms = Date.now()
+    rtcSignals = mySignals
+      .filter((s) => s && typeof s.t === 'number' && now_ms - s.t < 60_000)
+      .map((s) => ({ id: s.id, from: s.from, type: s.type, data: s.data }))
+    // clear the queue (signals are consumed)
+    void writeJSON(`rtc:${sessionId}`, [])
+  }
+
   return NextResponse.json(
     {
       messages: filtered,
@@ -225,6 +259,7 @@ export async function GET(req: NextRequest) {
       roster: rosterArr,
       typing: typingArr,
       channelCounts,
+      rtcSignals,
     },
     { headers: noStore },
   )
@@ -504,6 +539,38 @@ export async function POST(req: NextRequest) {
     }
     const pruned = pruneTyping(safeTyping, now)
     await writeJSON('typing', pruned)
+    return NextResponse.json({ ok: true }, { headers: noStore })
+  }
+
+  // ---- WebRTC signal: send an offer/answer/ICE to a specific peer ----
+  // Used by facetime + voicechat for peer-to-peer connection setup.
+  // The signal is stored in the RECIPIENT's queue (rtc:{recipientSessionId}).
+  if (op === 'rtcSignal') {
+    const b = body as {
+      from?: unknown
+      to?: unknown
+      type?: unknown
+      data?: unknown
+    }
+    const from = (typeof b.from === 'string' ? b.from : '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64)
+    const to = (typeof b.to === 'string' ? b.to : '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64)
+    const type = b.type === 'offer' || b.type === 'answer' || b.type === 'ice' ? b.type : null
+    if (!from || !to || !type) {
+      return NextResponse.json({ ok: false, error: 'missing from/to/type' }, { status: 400, headers: noStore })
+    }
+    const sig: WebRtcSignal = {
+      id: `${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      from,
+      to,
+      type,
+      data: b.data,
+      t: now,
+    }
+    // write to the recipient's signal queue
+    const queue = await readJSON<WebRtcSignal[]>(`rtc:${to}`, [])
+    const safeQueue = Array.isArray(queue) ? queue : []
+    const next = [...safeQueue, sig].slice(-50) // cap at 50 signals
+    await writeJSON(`rtc:${to}`, next)
     return NextResponse.json({ ok: true }, { headers: noStore })
   }
 
