@@ -4,15 +4,57 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 /**
- * AI chat API — uses the Requesty API (OpenAI-compatible).
- * The API key is stored in .env as REQUESTY_API_KEY (never committed).
- * Model: google/gemma-4-31b-it
+ * AI chat API — combines Keenable web search with Requesty LLM.
+ *
+ * Flow:
+ * 1. If the user's question seems to need current/web info, search via Keenable
+ * 2. Send the conversation + search results to Requesty LLM
+ * 3. Return the LLM's answer
+ *
+ * Falls back gracefully if either API is unavailable.
  */
 
 const REQUESTY_URL = 'https://router.requesty.ai/v1/chat/completions'
+const KEENABLE_URL = 'https://api.keenable.ai/v1/search'
 const MODEL = 'google/gemma-4-31b-it'
 const SYSTEM_PROMPT =
-  'You are the jakob-52 AI assistant. You live behind a liquid-glass interface orbiting a black hole. Answer concisely and helpfully. Keep responses under ~200 words unless asked for more.'
+  'You are the jakob-52 AI assistant. You live behind a liquid-glass interface orbiting a black hole. Answer concisely and helpfully. Keep responses under ~200 words unless asked for more. If web search results are provided, use them to answer the question.'
+
+/** Detect if a question might need web search */
+function needsWebSearch(text: string): boolean {
+  const lower = text.toLowerCase()
+  const triggers = [
+    'latest', 'recent', 'news', 'today', 'current', '2024', '2025', '2026',
+    'weather', 'price', 'score', 'happening', 'update', 'who won', 'who is',
+    'what is the', 'how much', 'stock', 'release date', 'when did', 'when will',
+  ]
+  return triggers.some((t) => lower.includes(t))
+}
+
+/** Search the web via Keenable */
+async function webSearch(query: string): Promise<string> {
+  const key = process.env.KEENABLE_API_KEY
+  if (!key) return ''
+  try {
+    const res = await fetch(KEENABLE_URL, {
+      method: 'POST',
+      headers: {
+        'X-API-Key': key,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query }),
+    })
+    if (!res.ok) return ''
+    const data = await res.json()
+    if (!data.results || !Array.isArray(data.results)) return ''
+    const results = data.results.slice(0, 3).map((r: { title?: string; url?: string; snippet?: string }) =>
+      `[${r.title || 'Untitled'}](${r.url || ''}): ${r.snippet || ''}`,
+    ).join('\n')
+    return results ? `\n\nWeb search results for "${query}":\n${results}` : ''
+  } catch {
+    return ''
+  }
+}
 
 export async function POST(req: NextRequest) {
   let body: unknown
@@ -29,12 +71,27 @@ export async function POST(req: NextRequest) {
 
   const apiKey = process.env.REQUESTY_API_KEY
   if (!apiKey) {
-    return NextResponse.json({ error: 'AI API key not configured' }, { status: 500 })
+    return NextResponse.json({
+      text: 'AI is not configured. The admin needs to set the REQUESTY_API_KEY environment variable on the hosting provider (Netlify → Site settings → Environment variables).',
+    })
   }
 
   try {
+    const lastMessage = messages[messages.length - 1]
+    const userQuery = lastMessage?.content || ''
+
+    // Optionally search the web for current info
+    let searchContext = ''
+    if (needsWebSearch(userQuery)) {
+      searchContext = await webSearch(userQuery)
+    }
+
+    const systemContent = searchContext
+      ? `${SYSTEM_PROMPT}\n${searchContext}`
+      : SYSTEM_PROMPT
+
     const conv = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: systemContent },
       ...messages.map((m) => ({
         role: m.role === 'ai' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
         content: m.content,

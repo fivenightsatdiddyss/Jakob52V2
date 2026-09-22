@@ -14,6 +14,7 @@ import {
   Home,
   ChevronLeft,
   ExternalLink,
+  FlaskConical,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -136,7 +137,16 @@ export default function ProxyPanel() {
           <h2 className="text-2xl font-bold text-white">Proxy</h2>
           <p className="text-sm text-white/45">route the web around the hole · in-app relay</p>
         </div>
-        <div className="ml-auto inline-flex items-center gap-2 rounded-full glass-subtle px-3 py-1.5 text-xs text-emerald-300">
+        <a
+          href="/scramjet-proxy.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-gradient-to-br from-amber-500/30 to-orange-600/20 px-3 py-1.5 text-xs font-medium text-amber-200 ring-1 ring-inset ring-amber-400/30 transition-transform hover:scale-105"
+          >
+            <FlaskConical className="h-3.5 w-3.5" />
+            experimental proxy
+          </a>
+        <div className="inline-flex items-center gap-2 rounded-full glass-subtle px-3 py-1.5 text-xs text-emerald-300">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.7)]" />
           relay up
         </div>

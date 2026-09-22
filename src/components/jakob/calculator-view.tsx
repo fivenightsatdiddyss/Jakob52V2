@@ -127,8 +127,10 @@ export default function CalculatorView({ onUnlock }: Props) {
     setDisplay(formatted)
     setJustEvaluated(true)
 
-    // The cosmic gate: 3 + 2 + 3 = 8
-    if (result === UNLOCK_VALUE) {
+    // The cosmic gate: ONLY the exact expression "3+2+3" unlocks.
+    // Not just anything that equals 8 — the specific sequence 3, +, 2, +, 3.
+    const normalizedExpr = expr.replace(/\s/g, '').replace(/−/g, '-').replace(/×/g, '*').replace(/÷/g, '/')
+    if (normalizedExpr === '3+2+3') {
       setAttempting(true)
       setTimeout(() => {
         onUnlock()
