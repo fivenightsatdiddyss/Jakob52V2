@@ -5,13 +5,16 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Gamepad2, Search, X, Maximize2, Minimize2, Grid2x2, Loader2, RefreshCw, ExternalLink } from 'lucide-react'
 import { GAMES, type Game } from './games-data'
 import { GN_MATH_GAMES } from './gnmath-data'
+import { CLOUD_GAMES, type CloudGame } from './cloud-data'
+import CloudGamePlayer from './cloud-game-player'
 import { cn } from '@/lib/utils'
 
-type Provider = 'html5' | 'gnmath'
+type Provider = 'html5' | 'gnmath' | 'cloud'
 
 const PROVIDERS: { id: Provider; label: string }[] = [
   { id: 'html5', label: 'HTML5' },
   { id: 'gnmath', label: 'GN-MATH' },
+  { id: 'cloud', label: 'CLOUD' },
 ]
 
 const TYPE_LABEL: Record<string, string> = {
@@ -19,6 +22,7 @@ const TYPE_LABEL: Record<string, string> = {
   unity: 'unity',
   proxy: 'proxied',
   unityframe: 'unity',
+  cloud: 'cloud',
 }
 
 const FILTERS = [
@@ -38,6 +42,7 @@ export default function GamesPanel() {
   const [provider, setProvider] = useState<Provider>('html5')
   const [visible, setVisible] = useState(PAGE_SIZE)
   const [active, setActive] = useState<Game | null>(null)
+  const [cloudGame, setCloudGame] = useState<CloudGame | null>(null)
   const [fullscreen, setFullscreen] = useState(false)
   const [iframeKey, setIframeKey] = useState(0)
   const [iframeLoading, setIframeLoading] = useState(false)
@@ -82,7 +87,13 @@ export default function GamesPanel() {
     [],
   )
 
-  const activeGames = provider === 'html5' ? GAMES : gnmathNormalized
+  // Normalize CLOUD games to the Game shape — url is the game_key (used by the cloud launcher)
+  const cloudNormalized: Game[] = useMemo(
+    () => CLOUD_GAMES.map((g) => ({ name: g.name, url: g.game_key, thumb: g.image, type: 'cloud' as const })),
+    [],
+  )
+
+  const activeGames = provider === 'html5' ? GAMES : provider === 'gnmath' ? gnmathNormalized : cloudNormalized
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -90,6 +101,7 @@ export default function GamesPanel() {
       if (provider === 'html5' && filter !== 'all' && g.type !== filter && !(filter === 'unity' && g.type === 'unityframe')) {
         return false
       }
+      // cloud + gnmath don't use type filters
       if (!q) return true
       return g.name.toLowerCase().includes(q)
     })
@@ -108,6 +120,14 @@ export default function GamesPanel() {
   const hasMore = visible < filtered.length
 
   const openGame = useCallback((g: Game) => {
+    if (g.type === 'cloud') {
+      // Cloud games use the CloudGamePlayer (stratus API flow)
+      const cloudGameData = CLOUD_GAMES.find((c) => c.game_key === g.url)
+      if (cloudGameData) {
+        setCloudGame(cloudGameData)
+        return
+      }
+    }
     setActive(g)
     setIframeKey((k) => k + 1)
     setIframeLoading(true)
@@ -161,7 +181,7 @@ export default function GamesPanel() {
         <div>
           <h2 className="text-2xl font-bold text-white">Games</h2>
           <p className="text-sm text-white/45">
-            {activeGames.length} titles · {provider === 'html5' ? 'HTML5' : 'GN-MATH'} provider
+            {activeGames.length} titles · {provider === 'html5' ? 'HTML5' : provider === 'gnmath' ? 'GN-MATH' : 'CLOUD'} provider
           </p>
         </div>
         {/* Provider toggle */}
@@ -391,6 +411,14 @@ export default function GamesPanel() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Cloud game player (stratus API) */}
+      {cloudGame && (
+        <CloudGamePlayer
+          game={cloudGame}
+          onClose={() => setCloudGame(null)}
+        />
+      )}
     </motion.div>
   )
 }
