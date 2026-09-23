@@ -78,9 +78,9 @@ export default function CloudGamePlayer({
             if (!line.trim()) continue
             try {
               const event = JSON.parse(line)
-              if (event.status === 'creating_account') setStatusText('Creating account…')
-              else if (event.status === 'account_ready') setStatusText('Account ready…')
-              else if (event.status === 'requesting_game') setStatusText('Requesting game…')
+              if (event.status === 'creating_account') setStatusText('Creating cloud account… (this can take 30-60s)')
+              else if (event.status === 'account_ready') setStatusText('Account ready, requesting game…')
+              else if (event.status === 'requesting_game') setStatusText('Requesting game server…')
               else if (event.status === 'queue') {
                 setStatusText(`In queue — position ${event.queue_pos || '?'}`)
                 setState('queueing')
@@ -90,13 +90,16 @@ export default function CloudGamePlayer({
                 setSessionId(uuid)
                 break
               }
+              else if (event.status === 'error') {
+                throw new Error(event.error || 'Cloud server error during session creation')
+              }
             } catch {}
           }
           if (uuid) break
         }
       }
 
-      if (!uuid) throw new Error('No session UUID received')
+      if (!uuid) throw new Error('Cloud server timed out during account creation. The cloud gaming backend (raccoongame.com) may be overloaded or blocking connections. Try again in a minute.')
 
       // Step 2: startGame
       setState('starting')
