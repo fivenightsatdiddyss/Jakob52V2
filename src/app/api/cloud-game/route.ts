@@ -4,7 +4,7 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const STRATUS_PORT = '3004'
-const STRATUS_BASE = `http://localhost:${STRATUS_PORT}`
+const STRATUS_BASE = 'https://stratus-api-qfjq.onrender.com'
 const API_KEY = 'sk_live_jakob52_cloud'
 
 /**
