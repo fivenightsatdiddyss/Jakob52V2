@@ -3,29 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>jakob-52 · experimental proxy</title>
+  <title>jakob-52 · scramjet proxy</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #04020a; font-family: system-ui, -apple-system, sans-serif; color: #fff; }
-    #navbar {
-      position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
-      display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+    #toolbar {
+      display: flex; gap: 8px; padding: 10px 14px; align-items: center;
       background: rgba(10,5,24,0.85); backdrop-filter: blur(20px);
-      border-bottom: 1px solid rgba(255,255,255,0.08);
+      border-bottom: 1px solid rgba(255,255,255,0.08); z-index: 10;
     }
-    #back-btn {
-      display: flex; align-items: center; gap: 6px; padding: 6px 12px;
-      border-radius: 8px; background: rgba(255,255,255,0.08); color: #c4b5fd;
-      border: none; cursor: pointer; font-size: 13px; transition: background 0.2s;
+    .nav-btns { display: flex; gap: 4px; }
+    .nav-btns button {
+      background: rgba(255,255,255,0.08); border: none; color: #c4b5fd;
+      padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 14px;
+      transition: background 0.2s;
     }
-    #back-btn:hover { background: rgba(255,255,255,0.15); }
-    #address-bar {
+    .nav-btns button:hover { background: rgba(255,255,255,0.15); }
+    #url-bar {
       flex: 1; display: flex; align-items: center; gap: 8px; padding: 6px 12px;
       border-radius: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08);
     }
     #url-input {
-      flex: 1; background: transparent; border: none; color: #fff; font-size: 14px;
-      outline: none;
+      flex: 1; background: transparent; border: none; color: #fff; font-size: 14px; outline: none;
     }
     #url-input::placeholder { color: rgba(255,255,255,0.3); }
     #go-btn {
@@ -36,10 +35,10 @@
     #go-btn:hover { transform: scale(1.05); }
     #go-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
     #status {
-      font-size: 11px; color: rgba(255,255,255,0.4); padding: 0 8px;
+      font-size: 11px; color: rgba(255,255,255,0.4); padding: 0 8px; min-width: 80px; text-align: right;
     }
     #loading-screen {
-      position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column;
+      position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 16px; background: #04020a;
       transition: opacity 0.3s;
     }
@@ -50,22 +49,22 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     #loading-screen p { color: rgba(255,255,255,0.5); font-size: 14px; }
-    #frame-container {
-      position: fixed; top: 53px; left: 0; right: 0; bottom: 0;
+    #back-btn {
+      display: flex; align-items: center; gap: 6px; padding: 6px 12px;
+      border-radius: 8px; background: rgba(255,255,255,0.08); color: #c4b5fd;
+      border: none; cursor: pointer; font-size: 13px; transition: background 0.2s;
+      text-decoration: none;
     }
-    #frame-container iframe {
-      width: 100%; height: 100%; border: none;
-    }
-    #error-screen {
-      position: fixed; inset: 0; z-index: 10001; display: none; flex-direction: column;
-      align-items: center; justify-content: center; gap: 12px; background: #04020a;
-      text-align: center; padding: 20px;
-    }
-    #error-screen h2 { color: #f0abfc; font-size: 20px; }
-    #error-screen p { color: rgba(255,255,255,0.5); font-size: 14px; max-width: 400px; }
+    #back-btn:hover { background: rgba(255,255,255,0.15); }
+    #frame-container { position: fixed; top: 53px; left: 0; right: 0; bottom: 0; }
+    #frame-container iframe { width: 100%; height: 100%; border: none; }
   </style>
-  <script src="/scramjet/scramjet.js"></script>
-  <script src="/scramjet/controller.api.js"></script>
+  <!-- Load Scramjet + Controller (classic scripts, not modules) -->
+  <script src="/scramjet/scramjet/scramjet.js"></script>
+  <script src="/scramjet/controller/controller.api.js"></script>
+  <script src="/scramjet/scramjet-utils.js"></script>
+  <!-- Epoxy transport -->
+  <script src="https://cdn.jsdelivr.net/npm/@mercuryworkshop/epoxy-transport@3.0.1/dist/index.js"></script>
 </head>
 <body>
   <div id="loading-screen">
@@ -73,15 +72,14 @@
     <p>initializing scramjet proxy…</p>
   </div>
 
-  <div id="error-screen">
-    <h2>proxy error</h2>
-    <p id="error-msg"></p>
-    <button id="back-btn" onclick="window.location.href='/'">← back to jakob-52</button>
-  </div>
-
-  <div id="navbar" style="display:none;">
-    <button id="back-btn" onclick="window.location.href='/'">← back</button>
-    <div id="address-bar">
+  <div id="toolbar" style="display:none;">
+    <a href="/" id="back-btn">← back</a>
+    <div class="nav-btns">
+      <button id="backNav" title="Back">←</button>
+      <button id="forwardNav" title="Forward">→</button>
+      <button id="reloadNav" title="Reload">↻</button>
+    </div>
+    <div id="url-bar">
       <span style="font-size:12px;opacity:0.4;">🔒</span>
       <input id="url-input" type="text" placeholder="search or enter a url…" />
     </div>
@@ -90,100 +88,104 @@
   </div>
 
   <div id="frame-container">
-    <iframe id="proxy-frame"></iframe>
+    <iframe id="browser-frame" title="Scramjet Browser"></iframe>
   </div>
 
-  <script type="module">
-    import { init as initBootstrap } from '/scramjet/bootstrap-client.js';
+  <script>
+    const { Controller } = $scramjetController;
+    const { defaultConfig } = $scramjet;
+    const EpoxyTransport = self.EpoxyTransport.default;
 
-    const WISP_URL = 'wss://bare-server.fly.dev/wisp/';
-    const loadingScreen = document.getElementById('loading-screen');
-    const navbar = document.getElementById('navbar');
-    const urlInput = document.getElementById('url-input');
-    const goBtn = document.getElementById('go-btn');
-    const status = document.getElementById('status');
-    const frame = document.getElementById('proxy-frame');
-    const errorScreen = document.getElementById('error-screen');
-    const errorMsg = document.getElementById('error-msg');
+    const iframe = document.getElementById("browser-frame");
+    const urlInput = document.getElementById("url-input");
+    const goBtn = document.getElementById("go-btn");
+    const statusEl = document.getElementById("status");
+    const loadingScreen = document.getElementById("loading-screen");
+    const toolbar = document.getElementById("toolbar");
 
-    let controller = null;
-    let proxyFrame = null;
+    let scramjet = null;
+    let frame = null;
+
+    function setStatus(t, err = false) {
+      statusEl.textContent = t;
+      statusEl.style.color = err ? "#ff6b6b" : "rgba(255,255,255,0.4)";
+    }
+
+    function norm(u) {
+      return u.startsWith("http") ? u : "https://" + u;
+    }
 
     async function init() {
       try {
-        status.textContent = 'registering service worker…';
-        controller = await initBootstrap({
-          swPath: '/scramjet/controller.sw.js',
-          scramjetBundlePath: '/scramjet/scramjet.js',
-          scramjetControllerApiPath: '/scramjet/controller.api.js',
-          scramjetUtilsBundlePath: '/scramjet/scramjet-utils.js',
-          scramjetWasmPath: '/scramjet/scramjet.wasm',
-          scramjetControllerInjectPath: '/scramjet/controller.inject.js',
-          wispPath: WISP_URL,
-          transport: 'epoxy',
-          epoxyClientPath: '', // epoxy is bundled in newer versions
+        setStatus("initializing…");
+        await navigator.serviceWorker.ready;
+        const serviceworker = navigator.serviceWorker.controller ?? (await navigator.serviceWorker.ready).active;
+
+        // Connect to a wisp server via Epoxy transport
+        const transport = new EpoxyTransport({
+          wisp: "wss://wisp.mercurywork.shop/"
         });
+        await transport.init();
 
-        status.textContent = 'ready';
-        loadingScreen.classList.add('hidden');
-        navbar.style.display = 'flex';
+        // Create the Scramjet controller
+        scramjet = new Controller({
+          serviceworker,
+          transport,
+          scramjetConfig: defaultConfig
+        });
+        await scramjet.wait();
 
-        // create the proxy frame
+        // Create the browsing frame
+        frame = scramjet.createFrame(iframe);
+
+        // Update URL bar when navigating
         const urlWatcher = new $scramjetUtils.UrlWatcherPlugin((url) => {
           urlInput.value = url;
         });
         const catchEscapedLinks = new $scramjetUtils.CatchEscapedLinksPlugin(
           (url) => new URL(`/?goto=${encodeURIComponent(url.href)}`, location.origin)
         );
+        frame = scramjet.createFrame(iframe, { plugins: [urlWatcher, catchEscapedLinks] });
 
-        proxyFrame = controller.createFrame(frame, {
-          plugins: [urlWatcher, catchEscapedLinks],
-        });
-
-        // check for a goto param in the URL
+        // Check for a goto param
         const params = new URLSearchParams(location.search);
-        const goto = params.get('goto');
+        const goto = params.get("goto");
         if (goto) {
           urlInput.value = goto;
-          navigate(goto);
+          frame.go(norm(goto));
+        } else {
+          frame.go("https://www.google.com");
         }
-      } catch (err) {
-        console.error('scramjet init failed:', err);
-        errorMsg.textContent = err.message || 'Failed to initialize the scramjet proxy.';
-        errorScreen.style.display = 'flex';
-        loadingScreen.classList.add('hidden');
+
+        setStatus("ready");
+        loadingScreen.classList.add("hidden");
+        toolbar.style.display = "flex";
+      } catch (e) {
+        console.error(e);
+        setStatus(e.message, true);
+        loadingScreen.querySelector("p").textContent = "Error: " + e.message;
       }
     }
 
-    async function navigate(url) {
-      if (!proxyFrame || !controller) {
-        status.textContent = 'initializing…';
-        await init();
-      }
-      if (!url) return;
-      if (!url.startsWith('http')) {
-        url = 'https://' + url;
-      }
-      status.textContent = 'loading…';
-      goBtn.disabled = true;
-      try {
-        await proxyFrame.go(url);
-        status.textContent = 'ready';
-      } catch (err) {
-        status.textContent = 'error';
-        console.error('navigation error:', err);
-      } finally {
-        goBtn.disabled = false;
-      }
+    function go() {
+      const url = norm(urlInput.value);
+      urlInput.value = url;
+      frame?.go(url);
+      setStatus("loading…");
     }
 
-    goBtn.addEventListener('click', () => navigate(urlInput.value));
-    urlInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') navigate(urlInput.value);
-    });
+    goBtn.onclick = go;
+    urlInput.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+    document.getElementById("backNav").onclick = () => { frame?.back?.(); };
+    document.getElementById("forwardNav").onclick = () => { frame?.forward?.(); };
+    document.getElementById("reloadNav").onclick = () => { frame?.go(frame.currentUrl || urlInput.value); };
 
-    // start init
-    init();
+    // Register the service worker, then boot
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").then(init);
+    } else {
+      setStatus("No service worker support", true);
+    }
   </script>
 </body>
 </html>
