@@ -1,18 +1,9 @@
 'use client'
 
-/**
- * ICE server configuration for WebRTC.
- *
- * Fetches fresh TURN credentials from Metered's REST API on each call using
- * the API key. This generates ephemeral credentials that are harder to abuse
- * than static ones. Falls back to the static credentials if the API is down.
- */
-
-const METERED_API_KEY = '5313fa3b159612e6737c1c0beb66f5fa0a63'
-const METERED_API_URL = 'https://studyixl.metered.live/api/v1/turn/credentials?apiKey=' + METERED_API_KEY
-
-// Static fallback credentials (used if the API fetch fails)
-const STATIC_ICE: RTCIceServer[] = [
+// Hardcoded ICE servers from Metered — no async fetch needed.
+// This eliminates the race condition where peer connections were created
+// before TURN credentials were available.
+export const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.relay.metered.ca:80' },
   { urls: 'stun:stun.l.google.com:19302' },
   {
@@ -37,32 +28,6 @@ const STATIC_ICE: RTCIceServer[] = [
   },
 ]
 
-// Cache so we only fetch once per session
-let cachedServers: RTCIceServer[] | null = null
-
-/**
- * Fetches fresh TURN credentials from Metered's REST API.
- * Falls back to static credentials if the API is unreachable.
- */
 export async function getIceServers(): Promise<RTCIceServer[]> {
-  if (cachedServers) return cachedServers
-
-  try {
-    const res = await fetch(METERED_API_URL)
-    if (res.ok) {
-      const data = await res.json()
-      if (Array.isArray(data) && data.length > 0) {
-        cachedServers = data as RTCIceServer[]
-        return cachedServers
-      }
-    }
-  } catch {
-    // API unreachable — fall through to static
-  }
-
-  cachedServers = STATIC_ICE
-  return cachedServers
+  return ICE_SERVERS
 }
-
-/** Static fallback (used for the initial iceServersRef before the fetch completes) */
-export const ICE_SERVERS = STATIC_ICE
