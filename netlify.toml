@@ -32,3 +32,40 @@
     X-Frame-Options = "SAMEORIGIN"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "no-referrer"
+
+# Scramjet static files — serve with correct content types + no security headers
+# that would block service worker registration or script loading
+[[headers]]
+  for = "/scramjet/*"
+  [headers.values]
+    Content-Type = "application/javascript"
+    Cache-Control = "public, max-age=86400"
+    X-Frame-Options = ""
+    Content-Security-Policy = ""
+
+[[headers]]
+  for = "/scramjet/scramjet.wasm"
+  [headers.values]
+    Content-Type = "application/wasm"
+    Cache-Control = "public, max-age=86400"
+
+[[headers]]
+  for = "/controller/*"
+  [headers.values]
+    Content-Type = "application/javascript"
+    Cache-Control = "public, max-age=86400"
+    X-Frame-Options = ""
+    Content-Security-Policy = ""
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Content-Type = "application/javascript"
+    Cache-Control = "no-cache"
+    Service-Worker-Allowed = "/"
+
+[[headers]]
+  for = "/scramjet-proxy.html"
+  [headers.values]
+    X-Frame-Options = ""
+    Content-Security-Policy = ""
