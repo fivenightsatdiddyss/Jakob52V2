@@ -13,7 +13,7 @@ type RtcSignal = { id: string; from: string; type: 'offer' | 'answer' | 'ice'; d
 
 type VoicechatRoomProps = { profile: Profile; sessionId: string }
 
-const POLL_INTERVAL_MS = 1500
+const POLL_INTERVAL_MS = 2000 // slower polling = less lag
 const PRESENCE_KEEPALIVE_MS = 8000
 const TALK_THRESHOLD = 0.08
 

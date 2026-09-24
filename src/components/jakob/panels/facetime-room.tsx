@@ -46,7 +46,7 @@ type FacetimeRoomProps = {
   initialRoom?: string
 }
 
-const POLL_INTERVAL_MS = 1500 // same as chat
+const POLL_INTERVAL_MS = 2000 // slower polling = less lag
 const PRESENCE_KEEPALIVE_MS = 8000
 
 /**
@@ -139,8 +139,17 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
       }
       pc.oniceconnectionstatechange = () => {
         setPeerStates((prev) => ({ ...prev, [peerId]: pc.iceConnectionState }))
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+        if (pc.iceConnectionState === 'failed') {
           try { pc.restartIce() } catch { /* ignore */ }
+          // If still failed after restart, tear down and let the next poll rediscover
+          setTimeout(() => {
+            if (pc.iceConnectionState === 'failed') {
+              try { pc.close() } catch {}
+              pcRef.current.delete(peerId)
+              knownPeersRef.current.delete(peerId)
+              pendingIceRef.current.delete(peerId)
+            }
+          }, 5000)
         }
       }
       pc.onconnectionstatechange = () => {
@@ -276,8 +285,8 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
       let stream: MediaStream
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: true,
+          video: { facingMode: 'user', width: { ideal: 320 }, height: { ideal: 240 } },
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         })
       } catch {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true })
