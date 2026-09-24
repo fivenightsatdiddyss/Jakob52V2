@@ -42,7 +42,7 @@ export default function VoicechatRoom({ profile, sessionId }: VoicechatRoomProps
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const lastPresenceRef = useRef<number>(0)
   const mountedRef = useRef<boolean>(true)
-  const iceServersRef = useRef<RTCIceServer[]>([{ urls: 'stun:stun.l.google.com:19302' }])
+  const iceServersRef = useRef<RTCIceServer[]>([])
   const analyserRef = useRef<Map<string, AnalyserNode>>(new Map())
   const rafRef = useRef<number>(0)
   const mutedPeersRef = useRef<Set<string>>(new Set())
@@ -211,7 +211,19 @@ export default function VoicechatRoom({ profile, sessionId }: VoicechatRoomProps
       setJoined(true)
       joinedRef.current = true
       mountedRef.current = true
-      getIceServers().then((s) => { iceServersRef.current = s }).catch(() => {})
+      // AWAIT TURN credentials before polling
+      try {
+        iceServersRef.current = await getIceServers()
+      } catch {
+        iceServersRef.current = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          {
+            urls: 'turn:global.relay.metered.ca:443',
+            username: '0061e8c46f003a057211190c',
+            credential: 'tztJo1nb3m+DaCb8',
+          },
+        ]
+      }
       sendPresence()
       void poll()
       pollTimerRef.current = setInterval(() => { void poll() }, POLL_INTERVAL_MS)

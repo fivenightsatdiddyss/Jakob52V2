@@ -59,24 +59,19 @@
     #frame-container { position: fixed; top: 53px; left: 0; right: 0; bottom: 0; }
     #frame-container iframe { width: 100%; height: 100%; border: none; }
   </style>
-  <!-- Load Scramjet + Controller (classic scripts, not modules) -->
   <script src="/scramjet/scramjet/scramjet.js"></script>
   <script src="/scramjet/controller/controller.api.js"></script>
-  <script src="/scramjet/scramjet-utils.js"></script>
-  <!-- Epoxy transport -->
   <script src="https://cdn.jsdelivr.net/npm/@mercuryworkshop/epoxy-transport@3.0.1/dist/index.js"></script>
 </head>
 <body>
   <div id="loading-screen">
     <div class="spinner"></div>
-    <p>initializing scramjet proxy…</p>
+    <p id="loading-text">initializing scramjet proxy…</p>
   </div>
 
   <div id="toolbar" style="display:none;">
     <a href="/" id="back-btn">← back</a>
     <div class="nav-btns">
-      <button id="backNav" title="Back">←</button>
-      <button id="forwardNav" title="Forward">→</button>
       <button id="reloadNav" title="Reload">↻</button>
     </div>
     <div id="url-bar">
@@ -92,21 +87,15 @@
   </div>
 
   <script>
-    const { Controller } = $scramjetController;
-    const { defaultConfig } = $scramjet;
-    const EpoxyTransport = self.EpoxyTransport.default;
+    var loadingText = document.getElementById("loading-text");
+    var loadingScreen = document.getElementById("loading-screen");
+    var toolbar = document.getElementById("toolbar");
+    var statusEl = document.getElementById("status");
+    var urlInput = document.getElementById("url-input");
+    var goBtn = document.getElementById("go-btn");
+    var iframe = document.getElementById("browser-frame");
 
-    const iframe = document.getElementById("browser-frame");
-    const urlInput = document.getElementById("url-input");
-    const goBtn = document.getElementById("go-btn");
-    const statusEl = document.getElementById("status");
-    const loadingScreen = document.getElementById("loading-screen");
-    const toolbar = document.getElementById("toolbar");
-
-    let scramjet = null;
-    let frame = null;
-
-    function setStatus(t, err = false) {
+    function setStatus(t, err) {
       statusEl.textContent = t;
       statusEl.style.color = err ? "#ff6b6b" : "rgba(255,255,255,0.4)";
     }
@@ -117,74 +106,69 @@
 
     async function init() {
       try {
-        setStatus("initializing…");
+        loadingText.textContent = "registering service worker…";
         await navigator.serviceWorker.ready;
-        const serviceworker = navigator.serviceWorker.controller ?? (await navigator.serviceWorker.ready).active;
+        var serviceworker = navigator.serviceWorker.controller || (await navigator.serviceWorker.ready).active;
 
-        // Connect to a wisp server via Epoxy transport
-        const transport = new EpoxyTransport({
+        loadingText.textContent = "connecting to wisp server…";
+        var EpoxyTransport = self.EpoxyTransport.default;
+        var transport = new EpoxyTransport({
           wisp: "wss://wisp.mercurywork.shop/"
         });
         await transport.init();
 
-        // Create the Scramjet controller
-        scramjet = new Controller({
-          serviceworker,
-          transport,
+        loadingText.textContent = "starting scramjet controller…";
+        var Controller = $scramjetController.Controller;
+        var defaultConfig = $scramjet.defaultConfig;
+        var scramjet = new Controller({
+          serviceworker: serviceworker,
+          transport: transport,
           scramjetConfig: defaultConfig
         });
         await scramjet.wait();
 
-        // Create the browsing frame
-        frame = scramjet.createFrame(iframe);
+        loadingText.textContent = "creating browser frame…";
+        var frame = scramjet.createFrame(iframe);
 
-        // Update URL bar when navigating
-        const urlWatcher = new $scramjetUtils.UrlWatcherPlugin((url) => {
-          urlInput.value = url;
-        });
-        const catchEscapedLinks = new $scramjetUtils.CatchEscapedLinksPlugin(
-          (url) => new URL(`/?goto=${encodeURIComponent(url.href)}`, location.origin)
-        );
-        frame = scramjet.createFrame(iframe, { plugins: [urlWatcher, catchEscapedLinks] });
-
-        // Check for a goto param
-        const params = new URLSearchParams(location.search);
-        const goto = params.get("goto");
-        if (goto) {
-          urlInput.value = goto;
-          frame.go(norm(goto));
-        } else {
-          frame.go("https://www.google.com");
-        }
+        // Navigate to google by default
+        frame.go("https://www.google.com");
 
         setStatus("ready");
         loadingScreen.classList.add("hidden");
         toolbar.style.display = "flex";
+
+        // Wire up the URL bar
+        goBtn.onclick = function() {
+          var url = norm(urlInput.value);
+          urlInput.value = url;
+          frame.go(url);
+          setStatus("loading…");
+        };
+
+        urlInput.addEventListener("keydown", function(e) {
+          if (e.key === "Enter") goBtn.onclick();
+        });
+
+        document.getElementById("reloadNav").onclick = function() {
+          frame.go(urlInput.value);
+        };
+
       } catch (e) {
         console.error(e);
-        setStatus(e.message, true);
-        loadingScreen.querySelector("p").textContent = "Error: " + e.message;
+        loadingText.textContent = "Error: " + e.message;
+        loadingText.style.color = "#ff6b6b";
       }
     }
 
-    function go() {
-      const url = norm(urlInput.value);
-      urlInput.value = url;
-      frame?.go(url);
-      setStatus("loading…");
-    }
-
-    goBtn.onclick = go;
-    urlInput.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
-    document.getElementById("backNav").onclick = () => { frame?.back?.(); };
-    document.getElementById("forwardNav").onclick = () => { frame?.forward?.(); };
-    document.getElementById("reloadNav").onclick = () => { frame?.go(frame.currentUrl || urlInput.value); };
-
     // Register the service worker, then boot
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").then(init);
+      navigator.serviceWorker.register("/sw.js").then(init).catch(function(e) {
+        loadingText.textContent = "Service worker registration failed: " + e.message;
+        loadingText.style.color = "#ff6b6b";
+      });
     } else {
-      setStatus("No service worker support", true);
+      loadingText.textContent = "No service worker support";
+      loadingText.style.color = "#ff6b6b";
     }
   </script>
 </body>

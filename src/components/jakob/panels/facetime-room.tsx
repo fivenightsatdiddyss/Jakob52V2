@@ -86,10 +86,7 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const lastPresenceRef = useRef<number>(0)
   const mountedRef = useRef<boolean>(true)
-  const iceServersRef = useRef<RTCIceServer[]>([
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-  ])
+  const iceServersRef = useRef<RTCIceServer[]>([])
 
   useEffect(() => { profileRef.current = profile }, [profile])
   useEffect(() => { roomRef.current = room }, [room])
@@ -294,8 +291,20 @@ export default function FacetimeRoom({ profile, sessionId, initialRoom = 'public
       setJoined(true)
       joinedRef.current = true
       mountedRef.current = true
-      // Fetch TURN credentials (async, non-blocking)
-      getIceServers().then((servers) => { iceServersRef.current = servers }).catch(() => {})
+      // AWAIT TURN credentials before starting to poll — this ensures
+      // peer connections are created with working TURN servers, not just STUN.
+      try {
+        iceServersRef.current = await getIceServers()
+      } catch {
+        iceServersRef.current = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          {
+            urls: 'turn:global.relay.metered.ca:443',
+            username: '0061e8c46f003a057211190c',
+            credential: 'tztJo1nb3m+DaCb8',
+          },
+        ]
+      }
       sendPresence()
       void poll()
       pollTimerRef.current = setInterval(() => { void poll() }, POLL_INTERVAL_MS)
