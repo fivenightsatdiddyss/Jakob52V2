@@ -6,15 +6,18 @@ import { Gamepad2, Search, X, Maximize2, Minimize2, Grid2x2, Loader2, RefreshCw,
 import { GAMES, type Game } from './games-data'
 import { GN_MATH_GAMES } from './gnmath-data'
 import { CLOUD_GAMES, type CloudGame } from './cloud-data'
+import { SERAPH_GAMES } from './seraph-data'
 import CloudGamePlayer from './cloud-game-player'
 import { cn } from '@/lib/utils'
 
-type Provider = 'html5' | 'gnmath' | 'cloud'
+type Provider = 'html5' | 'gnmath' | 'cloud' | 'seraph' | 'lumin'
 
 const PROVIDERS: { id: Provider; label: string }[] = [
   { id: 'html5', label: 'HTML5' },
   { id: 'gnmath', label: 'GN-MATH' },
   { id: 'cloud', label: 'CLOUD' },
+  { id: 'seraph', label: 'Seraph' },
+  { id: 'lumin', label: 'LuminSDK' },
 ]
 
 const TYPE_LABEL: Record<string, string> = {
@@ -93,7 +96,13 @@ export default function GamesPanel() {
     [],
   )
 
-  const activeGames = provider === 'html5' ? GAMES : provider === 'gnmath' ? gnmathNormalized : cloudNormalized
+  // Normalize Seraph games
+  const seraphNormalized: Game[] = useMemo(
+    () => SERAPH_GAMES.map((g) => ({ name: g.name, url: g.url, thumb: g.thumb, type: 'iframe' as const })),
+    [],
+  )
+
+  const activeGames = provider === 'html5' ? GAMES : provider === 'gnmath' ? gnmathNormalized : provider === 'cloud' ? cloudNormalized : provider === 'seraph' ? seraphNormalized : []
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -181,7 +190,7 @@ export default function GamesPanel() {
         <div>
           <h2 className="text-2xl font-bold text-white">Games</h2>
           <p className="text-sm text-white/45">
-            {activeGames.length} titles · {provider === 'html5' ? 'HTML5' : provider === 'gnmath' ? 'GN-MATH' : 'CLOUD'} provider
+            {activeGames.length} titles · {provider === 'html5' ? 'HTML5' : provider === 'gnmath' ? 'GN-MATH' : provider === 'cloud' ? 'CLOUD' : provider === 'seraph' ? 'Seraph' : 'LuminSDK'} provider
           </p>
         </div>
         {/* Provider toggle */}
@@ -253,8 +262,10 @@ export default function GamesPanel() {
         )}
       </div>
 
-      {/* Gallery */}
-      {shown.length === 0 ? (
+      {/* Gallery — LuminSDK provider shows an embedded SDK instead of a grid */}
+      {provider === 'lumin' ? (
+        <LuminSDKGrid />
+      ) : shown.length === 0 ? (
         <div className="glass glass-sheen grid place-items-center rounded-3xl py-20 text-center">
           <div>
             <Search className="mx-auto mb-3 h-10 w-10 text-white/20" />
@@ -420,6 +431,59 @@ export default function GamesPanel() {
         />
       )}
     </motion.div>
+  )
+}
+
+/**
+ * LuminSDKGrid — embeds the LuminSDK game library via their CDN script.
+ * The SDK renders a grid of games into a container div.
+ */
+function LuminSDKGrid() {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    // Load the LuminSDK script
+    const existingScript = document.querySelector('script[src*="lumin.min.js"]')
+    if (existingScript) {
+      if ((window as any).Lumin) {
+        setLoaded(true)
+      }
+      return
+    }
+    const script = document.createElement('script')
+    script.src = 'https://cdn.jsdelivr.net/gh/luminsdk/script@latest/lumin.min.js'
+    script.onload = () => {
+      setLoaded(true)
+    }
+    document.head.appendChild(script)
+  }, [])
+
+  useEffect(() => {
+    if (!loaded || !containerRef.current) return
+    try {
+      (window as any).Lumin.init({
+        container: '#lumin-games-container',
+        theme: 'dark',
+      })
+    } catch (e) {
+      console.error('LuminSDK init failed:', e)
+    }
+  }, [loaded])
+
+  return (
+    <div className="glass glass-sheen rounded-3xl p-4">
+      {!loaded && (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="h-8 w-8 animate-spin text-fuchsia-300" />
+        </div>
+      )}
+      <div
+        id="lumin-games-container"
+        ref={containerRef}
+        style={{ minHeight: '400px' }}
+      />
+    </div>
   )
 }
 
