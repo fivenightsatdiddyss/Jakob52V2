@@ -447,6 +447,7 @@ function LuminSDKGrid() {
     const existingScript = document.querySelector('script[src*="lumin.min.js"]')
     if (existingScript) {
       if ((window as any).Lumin) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setLoaded(true)
       }
       return
