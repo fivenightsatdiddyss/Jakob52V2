@@ -197,7 +197,7 @@ export default function CalculatorView({ onUnlock }: Props) {
 
   return (
     <motion.div
-      className="relative flex min-h-screen w-full flex-col items-center justify-center overflow-hidden px-4 py-10"
+      className="calc-grid-bg relative flex min-h-screen w-full flex-col items-center justify-center overflow-hidden px-4 py-10"
       exit={{ opacity: 0, scale: 1.08, filter: 'blur(8px)' }}
       transition={{ duration: 0.7, ease: 'easeInOut' }}
     >

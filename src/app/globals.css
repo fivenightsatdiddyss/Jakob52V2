@@ -313,6 +313,16 @@
   animation: accretion-pulse 4s ease-in-out infinite;
 }
 
+/* Calm grid background for the calculator gate — black & gray */
+.calc-grid-bg {
+  background-color: #0a0a0a;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: -1px -1px;
+}
+
 /* Selection + base tweaks for the dark immersive theme */
 ::selection {
   background: rgba(168, 85, 247, 0.35);
