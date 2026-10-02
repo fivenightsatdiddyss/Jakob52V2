@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Gamepad2, Search, X, Maximize2, Minimize2, Grid2x2, Loader2, RefreshCw, ExternalLink } from 'lucide-react'
+import { Gamepad2, Search, X, Maximize2, Minimize2, Grid2x2, Loader2, RefreshCw, ExternalLink, Heart } from 'lucide-react'
 import { GAMES, type Game } from './games-data'
 import { GN_MATH_GAMES } from './gnmath-data'
 import { CLOUD_GAMES, type CloudGame } from './cloud-data'
@@ -265,7 +265,7 @@ export default function GamesPanel() {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+        <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
           <AnimatePresence mode="popLayout">
             {shown.map((g, i) => (
               <motion.button
@@ -277,22 +277,21 @@ export default function GamesPanel() {
                 transition={{ duration: 0.25, delay: Math.min(i * 0.01, 0.2) }}
                 whileHover={{ y: -4 }}
                 onClick={() => openGame(g)}
-                className="glass glass-sheen group relative aspect-[3/4] overflow-hidden rounded-2xl text-left"
+                className="group relative overflow-hidden rounded-xl bg-[#1a1a1a] ring-1 ring-white/5 transition-all hover:ring-white/20"
               >
-                <GameThumb game={g} />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
-                <span className="absolute left-2 top-2 rounded-md bg-black/50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-white/70 backdrop-blur-sm">
-                  {TYPE_LABEL[g.type] || g.type}
-                </span>
-                <div className="absolute inset-x-0 bottom-0 p-2.5">
-                  <h3 className="line-clamp-2 text-xs font-semibold leading-tight text-white">
+                {/* Thumbnail area — square-ish */}
+                <div className="relative aspect-square overflow-hidden">
+                  <GameThumb game={g} />
+                  {/* Heart/favorite icon top-right */}
+                  <div className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+                    <Heart className="h-3 w-3 text-white/50" />
+                  </div>
+                </div>
+                {/* Title below thumbnail */}
+                <div className="p-2">
+                  <h3 className="line-clamp-1 text-xs font-medium text-white/80">
                     {g.name}
                   </h3>
-                </div>
-                <div className="absolute inset-0 grid place-items-center opacity-0 transition-opacity group-hover:opacity-100">
-                  <div className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-fuchsia-500/80 to-violet-600/80 text-white shadow-lg">
-                    <Maximize2 className="h-5 w-5" />
-                  </div>
                 </div>
               </motion.button>
             ))}

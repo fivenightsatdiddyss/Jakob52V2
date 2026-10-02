@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import CalculatorView from '@/components/jakob/calculator-view'
 import MainView from '@/components/jakob/main-view'
-import ThemedBackground from '@/components/jakob/themed-background'
 
 type View = 'gate' | 'main'
 
@@ -24,9 +23,6 @@ export default function Home() {
 
   return (
     <div className="relative min-h-screen w-full overflow-x-hidden text-white">
-      {/* Themed background — only on the main view, NOT the calculator gate
-          (the calculator has its own grid background). */}
-      {view === 'main' && <ThemedBackground />}
       <AnimatePresence mode="wait">
         {view === 'gate' ? (
           <CalculatorView key="gate" onUnlock={() => setView('main')} />
