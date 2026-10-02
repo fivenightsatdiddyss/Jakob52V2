@@ -204,50 +204,51 @@ export default function CalculatorView({ onUnlock }: Props) {
       {/* The themed background is now rendered globally at the page level
           (page.tsx → ThemedBackground) so it shows on the calculator gate too. */}
 
-      {/* Calculator only — no title */}
+      {/* Calculator only — no title. Classic theme: black, gray, orange. */}
       <motion.div
         initial={{ opacity: 0, y: 30, scale: 0.96 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.7, ease: 'easeOut', delay: 0.15 }}
-        className="glass glass-sheen w-full max-w-[360px] rounded-[2rem] p-5 sm:max-w-[400px] sm:p-6"
+        className="w-full max-w-[340px] rounded-[1.5rem] bg-[#1a1a1a] p-4 shadow-2xl ring-1 ring-[#333] sm:max-w-[380px] sm:p-5"
+        style={{ boxShadow: '0 20px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05)' }}
       >
-        {/* Display */}
-        <div className="mb-5 rounded-2xl border border-white/10 bg-black/30 p-5">
-          <div className="flex items-center justify-between text-[11px] uppercase tracking-widest text-white/40">
+        {/* Display — classic calculator style */}
+        <div className="mb-4 rounded-xl bg-[#0d0d0d] p-4 ring-1 ring-[#2a2a2a]">
+          <div className="flex items-center justify-between text-[10px] uppercase tracking-widest text-gray-600">
             <span className="inline-flex items-center gap-1.5">
-              <Calculator className="h-3.5 w-3.5" />
-              jakob-calc
+              <Calculator className="h-3 w-3" />
+              calculator
             </span>
             <span>{justEvaluated ? 'result' : 'input'}</span>
           </div>
-          <div className="mt-2 truncate text-right text-4xl font-light text-white sm:text-5xl">
+          <div className="mt-2 truncate text-right font-mono text-4xl font-light text-gray-100 sm:text-5xl">
             {display}
           </div>
-          <div className="mt-1 h-4 truncate text-right text-sm text-white/35">
+          <div className="mt-1 h-4 truncate text-right font-mono text-sm text-gray-600">
             {expr || '\u00A0'}
           </div>
         </div>
 
-        {/* Buttons */}
-        <div className="grid grid-cols-4 gap-2.5">
+        {/* Buttons — classic calculator theme */}
+        <div className="grid grid-cols-4 gap-2">
           {buttons.map((b, i) => (
             <motion.button
               key={b.label + i}
               onClick={b.onClick}
               whileTap={{ scale: 0.92 }}
-              whileHover={{ y: -2 }}
+              whileHover={{ y: -1 }}
               transition={{ type: 'spring', stiffness: 400, damping: 22 }}
               className={cn(
-                'glass-sheen relative flex h-14 items-center justify-center rounded-2xl text-xl font-medium text-white/90 transition-colors',
+                'relative flex h-14 items-center justify-center rounded-xl text-xl font-medium transition-all',
                 b.span && 'col-span-2',
                 b.variant === 'fn' &&
-                  'bg-white/10 text-white/70 hover:bg-white/15',
+                  'bg-[#3a3a3a] text-gray-300 hover:bg-[#4a4a4a] active:bg-[#2a2a2a]',
                 b.variant === 'op' &&
-                  'bg-gradient-to-br from-violet-500/30 to-fuchsia-500/20 text-fuchsia-100 hover:from-violet-500/45 hover:to-fuchsia-500/30',
+                  'bg-[#ff9500] text-white hover:bg-[#ffaa20] active:bg-[#e68600]',
                 b.variant === 'eq' &&
-                  'bg-gradient-to-br from-fuchsia-500/60 to-violet-600/60 text-white hover:from-fuchsia-500/80 hover:to-violet-600/80',
+                  'bg-[#ff9500] text-white hover:bg-[#ffaa20] active:bg-[#e68600]',
                 (!b.variant || b.variant === 'num') &&
-                  'bg-white/5 hover:bg-white/12'
+                  'bg-[#2a2a2a] text-gray-100 hover:bg-[#3a3a3a] active:bg-[#1a1a1a]'
               )}
             >
               {b.label}
