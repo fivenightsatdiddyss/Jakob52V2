@@ -24,9 +24,9 @@ export default function Home() {
 
   return (
     <div className="relative min-h-screen w-full overflow-x-hidden text-white">
-      {/* Themed background — renders on ALL pages (gate + main view) so the
-          selected background shows everywhere, not just the settings page. */}
-      <ThemedBackground />
+      {/* Themed background — only on the main view, NOT the calculator gate
+          (the calculator has its own grid background). */}
+      {view === 'main' && <ThemedBackground />}
       <AnimatePresence mode="wait">
         {view === 'gate' ? (
           <CalculatorView key="gate" onUnlock={() => setView('main')} />

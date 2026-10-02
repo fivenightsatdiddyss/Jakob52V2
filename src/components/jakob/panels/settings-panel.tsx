@@ -771,8 +771,7 @@ export default function SettingsPanel() {
       {/* Panic Key — instant redirect on a keypress */}
       <PanicKeySection />
 
-      {/* Background theme — space / ocean / halloween */}
-      <BackgroundSection />
+      {/* Background theme — removed for now, will be re-added in a future update */}
 
       {/* Liquid glass intensity */}
       <section className="glass glass-sheen mb-6 rounded-3xl p-6">
